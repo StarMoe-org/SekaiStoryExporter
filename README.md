@@ -30,6 +30,7 @@
 | | [`docs/spec/tolerance.md`](docs/spec/tolerance.md) | 保真度容差规范（T1 跨平台 / T2 对游戏） |
 | | [`docs/testing.md`](docs/testing.md) | 五层测试策略 |
 | | [`docs/reverse/workflow.md`](docs/reverse/workflow.md) | 逆向工作流与 provenance 规约 |
+| | [`docs/reverse/work-order.md`](docs/reverse/work-order.md) | ⭐ 逆向工作单：需要从游戏中取得的内容 |
 | | [`docs/reverse/open-questions.md`](docs/reverse/open-questions.md) | 待确认事实清单 |
 | | [`docs/versioning.md`](docs/versioning.md) | 版本策略与游戏更新适配 checklist |
 | | [`docs/conventions/language.md`](docs/conventions/language.md) | 语言规约（代码与 commit 英文 / PR·Issue 中英皆可 / 设计文档中文） |

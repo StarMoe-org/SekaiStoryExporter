@@ -54,7 +54,8 @@ pjskChatGenerator/
 │   │   ├── ir.md                 ☐ 待设计
 │   │   └── param-table.md        ☐ 待设计
 │   ├── reverse/
-│   │   ├── open-questions.md     19 项待确认事实（🔴🟡🟢）
+│   │   ├── open-questions.md     待确认事实清单（🔴🟡🟢）
+│   │   ├── work-order.md         ⭐ 逆向工作单（RE-01…13 / RT-01…05）
 │   │   ├── workflow.md           逆向工作流 + provenance 规约
 │   │   ├── versions/<region>-<ver>/constants.yaml   ☐ 逆向产出，代码生成源
 │   │   └── notes/                调查笔记（自由格式）
