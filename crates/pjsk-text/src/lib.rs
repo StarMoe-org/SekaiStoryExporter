@@ -1,11 +1,12 @@
-//! # pjsk-text — SDF 文本
+//! # pjsk-text -- SDF text
 //!
-//! ## 职责
-//! - TMP FontAsset 解析：SDF atlas、glyph 表、kerning 表
-//! - TMP 排版语义：行距、字距、CJK 换行与禁则、富文本标签
-//! - 打字机效果（按 `maxVisibleCharacters` 逐字，非逐像素揭示）
-//! - TMP_SDF shader 参数的解析与传递（shader 本体在 `pjsk-render`）
-//! - fallback：用游戏自带 TTF 生成 SDF（Q11；力争不触发）
+//! ## Responsibilities
+//! - TextMeshPro FontAsset parsing: SDF atlas, glyph table, kerning table
+//! - TMP layout semantics: line spacing, character spacing, CJK line breaking and
+//!   kinsoku rules, rich-text tags
+//! - Typewriter reveal (TMP advances `maxVisibleCharacters`; it is not a per-pixel wipe)
+//! - Parsing and forwarding TMP_SDF material parameters (the shader itself lives in `pjsk-render`)
+//! - Fallback: generate SDF from the game's own TTF (decision Q11; we aim never to hit this)
 //!
-//! ## 允许依赖
-//! `pjsk-core`、`pjsk-assets`、`pjsk-ugui`。
+//! ## Allowed dependencies
+//! `pjsk-core`, `pjsk-assets`, `pjsk-ugui`.

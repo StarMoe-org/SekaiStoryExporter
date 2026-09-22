@@ -1,14 +1,18 @@
-//! # pjsk-bake — Pass 1：状态烘焙
+//! # pjsk-bake -- Pass 1: state baking
 //!
-//! 顺序空跑时间轴，只更新状态、不渲染，逐帧输出参数表。格式见 `docs/spec/param-table.md`。
+//! Walks the timeline sequentially, updating state only -- no rendering -- and emits a
+//! per-frame parameter table. Format spec: `docs/spec/param-table.md`.
 //!
-//! ## 职责
-//! - 驱动 Live2D 状态机、UI 状态、背景与特效状态
-//! - 逐帧输出完整状态快照（参数表）
-//! - delta + zstd 压缩
+//! ## Responsibilities
+//! - Drive the Live2D state machine, UI state, background and effect state
+//! - Emit a complete state snapshot per frame (the parameter table)
+//! - delta + zstd encoding
 //!
-//! ## 为什么存在
-//! 参数表一个中间层同时给出：可观测性（与游戏 dump 逐数值比对）、Pass 2 的无状态性、并行渲染、时间轴 seek。见 `docs/architecture.md`。
+//! ## Why this crate exists
+//! The parameter table is one intermediate layer that buys four things at once:
+//! observability (compare numerically against parameters dumped from the game),
+//! statelessness for Pass 2, parallel rendering, and timeline seeking.
+//! See `docs/architecture.md`.
 //!
-//! ## 不负责
-//! - 任何 GPU 操作
+//! ## Not responsible for
+//! - Any GPU work

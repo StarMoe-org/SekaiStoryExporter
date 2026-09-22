@@ -12,6 +12,8 @@
 *.wav
 *.png
 !docs/**/*.png
+# LFS 管理的参考帧 / reference frames under LFS
+!tests/fixtures/**/*.png
 
 # 逆向中间产物（体积大且含游戏代码，只提交提炼后的 constants.yaml）
 /dumps/

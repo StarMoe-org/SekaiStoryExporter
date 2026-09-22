@@ -6,7 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-pjsk-core,pjsk-ir,pjsk-assets,pjsk-timeline,pjsk-live2d,pjsk-ugui,pjsk-text = { path = "../pjsk-core,pjsk-ir,pjsk-assets,pjsk-timeline,pjsk-live2d,pjsk-ugui,pjsk-text" }
+pjsk-core = { path = "../pjsk-core" }
+pjsk-ir = { path = "../pjsk-ir" }
+pjsk-assets = { path = "../pjsk-assets" }
+pjsk-timeline = { path = "../pjsk-timeline" }
+pjsk-live2d = { path = "../pjsk-live2d" }
+pjsk-ugui = { path = "../pjsk-ugui" }
+pjsk-text = { path = "../pjsk-text" }
 
 [lints]
 workspace = true

@@ -1,15 +1,17 @@
-//! # pjsk-ir — 中间表示定义
+//! # pjsk-ir -- intermediate representation
 //!
-//! 项目的第一道接缝：解析层与编译层之间的契约。格式规范见 `docs/spec/ir.md`。
+//! The first seam of the project: the contract between the parsing layer and the
+//! compilation layer. Format spec: `docs/spec/ir.md`.
 //!
-//! ## 职责
-//! - IR 的数据结构定义与序列化/反序列化
-//! - IR 的版本号与向后兼容处理
-//! - `unsupported` 事件的表达（Q10 选了仅 2D，未支持内容须保留足够信息以便日后补齐）
+//! ## Responsibilities
+//! - IR data structures, (de)serialisation, and version field
+//! - Backwards-compatibility handling across IR versions
+//! - Representation of `unsupported` events -- decision Q10 covers 2D dialogue only,
+//!   so unsupported content must retain enough information to be filled in later
 //!
-//! ## 不负责
-//! - 从 ScenarioData 解析（那是 `pjsk-scenario`）
-//! - 时间计算（那是 `pjsk-timeline`）
+//! ## Not responsible for
+//! - Parsing `ScenarioData` (that is `pjsk-scenario`)
+//! - Any time computation (that is `pjsk-timeline`)
 //!
-//! ## 允许依赖
-//! 仅 `pjsk-core`。
+//! ## Allowed dependencies
+//! `pjsk-core` only.

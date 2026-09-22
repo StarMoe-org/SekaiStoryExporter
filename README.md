@@ -7,7 +7,8 @@
 | 语言 | Rust |
 | 渲染 | wgpu（macOS / Metal，Windows / DX12） |
 | 平台 | macOS (Apple Silicon)、Windows (NVIDIA) |
-| 状态 | **设计阶段**，尚无实现代码 |
+| 状态 / Status | **设计阶段**，尚无实现代码 / design stage, no implementation yet |
+| 许可 / Licence | AGPL-3.0-or-later + [Cubism Core 链接例外](LICENSE-EXCEPTION) |
 
 ## 支持矩阵
 
@@ -31,6 +32,7 @@
 | | [`docs/reverse/workflow.md`](docs/reverse/workflow.md) | 逆向工作流与 provenance 规约 |
 | | [`docs/reverse/open-questions.md`](docs/reverse/open-questions.md) | 待确认事实清单 |
 | | [`docs/versioning.md`](docs/versioning.md) | 版本策略与游戏更新适配 checklist |
+| | [`docs/conventions/language.md`](docs/conventions/language.md) | 语言规约（代码英文 / 文档中文 / 门面双语） |
 | | [`docs/risks.md`](docs/risks.md) | 已知风险登记 |
 | | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 协作流程与 PR 清单 |
 
@@ -38,7 +40,8 @@
 
 | 依赖 | 用途 | 必需 |
 |---|---|---|
-| Rust | 主工具链，版本由 `rust-toolchain.toml` 钉死 | ✅ |
+| Rust | 主工具链，版本由 `rust-toolchain.toml` 钉死（当前 1.98.1） | ✅ |
+| Git LFS | 二进制 fixture，克隆后执行 `git lfs install` | ✅ |
 | ffmpeg | 视频编码与混音 | ✅ |
 | Live2D Cubism Core | Live2D 模型解析与变形（用户自行获取，见 ADR-0002） | ✅ |
 | .NET | 生成 L1 oracle fixture | 开发期 |
@@ -61,3 +64,26 @@ Live2D 模型、动作、字体、语音、BGM、背景图等全部版权归 SEG
 本项目是资产查看与研究工具，代码开源，资产不分发。请勿使用本工具产出的内容进行商业用途或再分发。
 
 Live2D Cubism SDK 的使用与分发受 Live2D 自身条款约束，本仓库不包含其二进制，需用户自行获取并同意其条款。许可证事项见 [ADR-0002](docs/adr/0002-license.md)（**待定，未定前请勿对外发布**）。
+
+
+---
+
+## English summary
+
+A tool that reproduces Project Sekai's Live2D story scenes (visual-novel style) and
+exports them to video. Written in Rust, rendering through wgpu (Metal on macOS,
+DX12 on Windows).
+
+**This repository ships no game assets.** Live2D models, motions, fonts, voice lines,
+BGM and backgrounds all remain the property of SEGA / Colorful Palette. You must
+supply them yourself, either by fetching from a web assets source (`tools/fetch`) or
+from a local directory. The tool fails loudly with a list of missing assets rather
+than degrading silently.
+
+The Live2D Cubism SDK is **not** bundled. You must obtain it from Live2D Inc. and
+accept their terms. The project is AGPL-3.0-or-later with an additional permission
+allowing linking against Cubism Core -- see [`LICENSE-EXCEPTION`](LICENSE-EXCEPTION)
+and [ADR-0002](docs/adr/0002-license.md).
+
+Design documents live under `docs/` and are written in Chinese; code, commit messages
+and issues are in English. See [`docs/conventions/language.md`](docs/conventions/language.md).

@@ -6,7 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-pjsk-core,pjsk-assets,pjsk-ugui = { path = "../pjsk-core,pjsk-assets,pjsk-ugui" }
+pjsk-core = { path = "../pjsk-core" }
+pjsk-assets = { path = "../pjsk-assets" }
+pjsk-ugui = { path = "../pjsk-ugui" }
 
 [lints]
 workspace = true

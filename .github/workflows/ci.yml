@@ -1,8 +1,13 @@
 name: CI
 
+# ⚠️ CI 暂未启用（决策：2026-09-22）。仅保留配置，只能手动触发。
+#    启用时把下面的 push / pull_request 触发器取消注释。
+# ⚠️ CI is not enabled yet. Kept as configuration, manual dispatch only.
+#    Uncomment the push / pull_request triggers to enable.
 on:
-  push: { branches: [main] }
-  pull_request:
+  workflow_dispatch:
+  # push: { branches: [main] }
+  # pull_request:
 
 env:
   CARGO_TERM_COLOR: always

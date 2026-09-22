@@ -1,6 +1,8 @@
-//! # pjsk-cli — 命令行入口
+//! # pjsk-cli -- command-line entry point
 //!
-//! ## 职责
-//! - 子命令编排：fetch / stats / compile / bake / render / export / diff
-//! - `OutputConfig` 的壳（Q15：输出形态是结构体，CLI 只是它的一层壳）
-//! - 预览器（P7）也在此挂载，与导出器共用同一份参数表
+//! ## Responsibilities
+//! - Subcommand orchestration: fetch / stats / compile / bake / render / export / diff
+//! - The shell around `OutputConfig` (decision Q15: output form is a struct; the CLI is
+//!   only a thin layer over it)
+//! - The preview player (roadmap P7) also mounts here and consumes the same parameter
+//!   table as the exporter (decision Q4)

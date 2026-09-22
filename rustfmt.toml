@@ -1,4 +1,4 @@
 edition = "2024"
 max_width = 100
-imports_granularity = "Crate"
-group_imports = "StdExternalCrate"
+# imports_granularity / group_imports 为 nightly-only，稳定版会对每个文件刷警告，故不启用。
+# imports_granularity / group_imports are nightly-only; they emit a warning per file on stable.

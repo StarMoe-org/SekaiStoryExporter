@@ -1,11 +1,14 @@
-//! # pjsk-fidelity — 保真度比对
+//! # pjsk-fidelity -- fidelity comparison
 //!
-//! `docs/spec/tolerance.md` 的执行者。
+//! The executor of `docs/spec/tolerance.md`.
 //!
-//! ## 职责
-//! - T1（跨平台）与 T2（对游戏）两套比对
-//! - **差异形态分类器**：边缘带 / 区块 / 孤点 / 全局偏移 —— 这是核心，比阈值重要
-//! - 差异热力图、分层归因、报告生成
+//! ## Responsibilities
+//! - T1 (cross-platform) and T2 (against the game) comparisons
+//! - **Difference-shape classifier**: edge band / block / isolated point / global offset.
+//!   This is the core of the crate and matters more than the thresholds
+//! - Difference heat maps, per-layer attribution, report generation
 //!
-//! ## 设计要点
-//! 输出不是一个数字，而是形态分类 + 定位。纯幅度阈值会把真 bug 吃掉。
+//! ## Design note
+//! The output is not a single number but a shape classification plus a location.
+//! A pure magnitude threshold will swallow real bugs -- for example a `max diff = 1`
+//! spread evenly over the dialogue box is almost certainly a mis-transcribed colour.

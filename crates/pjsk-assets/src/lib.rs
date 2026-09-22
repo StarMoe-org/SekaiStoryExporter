@@ -1,13 +1,13 @@
-//! # pjsk-assets — 资产源抽象与缓存
+//! # pjsk-assets -- asset sources and caching
 //!
-//! ## 职责
-//! - 资产源抽象：Web Assets Source / 本地目录（Q17）
-//! - manifest 与内容寻址缓存（CAS）
-//! - 资产缺失时的**明确报错与缺失清单**（禁止静默降级）
-//! - 资产版本锁定（`assets.lock`）
+//! ## Responsibilities
+//! - Asset source abstraction: Web Assets Source / local directory (decision Q17)
+//! - Manifest and content-addressed cache
+//! - **Explicit failure with a list of missing assets.** Silent degradation is forbidden
+//! - Asset version pinning (`assets.lock`)
 //!
-//! ## 不负责
-//! - 资产的语义解释（各自由对应 crate 负责）
+//! ## Not responsible for
+//! - Interpreting asset contents (each consuming crate does that)
 //!
-//! ## 允许依赖
-//! 仅 `pjsk-core`。
+//! ## Allowed dependencies
+//! `pjsk-core` only.

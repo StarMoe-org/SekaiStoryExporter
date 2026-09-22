@@ -1,15 +1,18 @@
-//! # pjsk-timeline — 时间轴编译器
+//! # pjsk-timeline -- timeline compiler
 //!
-//! 把 IR 的相对语义编译成绝对时间轴。**这是节奏正确性的唯一负责方。**
+//! Compiles the relative semantics of the IR into an absolute timeline.
+//! **Sole owner of pacing correctness.**
 //!
-//! ## 职责
-//! - Snippet 流 → 绝对秒数（`Delay` 语义、`Now` 并发、`WaitUntilFinished` 阻塞）
-//! - 时长来源：语音实际时长 / 特效 Duration / 动作时长 / 无语音时的启发式
-//! - 分支拍平（Q10 附带决策：默认走第一项，支持指定与全量）
-//! - 支持人工覆盖文件（某句停顿加时等）
+//! ## Responsibilities
+//! - Snippet stream -> absolute frame ranges: `Delay` semantics, `Now` concurrency,
+//!   `WaitUntilFinished` blocking
+//! - Duration sources: actual voice length, effect `Duration`, motion length,
+//!   and the heuristic used when a line has no voice
+//! - Branch flattening (default: first option; `--branch` / `--all-branches`)
+//! - Manual override files (e.g. adding a pause to one line)
 //!
-//! ## 不负责
-//! - 任何渲染或状态求值
+//! ## Not responsible for
+//! - Any rendering or state evaluation
 //!
-//! ## 允许依赖
-//! `pjsk-core`、`pjsk-ir`、`pjsk-assets`。
+//! ## Allowed dependencies
+//! `pjsk-core`, `pjsk-ir`, `pjsk-assets`.

@@ -6,7 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-pjsk-core,pjsk-ir,pjsk-assets,pjsk-scenario,pjsk-timeline,pjsk-bake,pjsk-render,pjsk-export,pjsk-fidelity = { path = "../pjsk-core,pjsk-ir,pjsk-assets,pjsk-scenario,pjsk-timeline,pjsk-bake,pjsk-render,pjsk-export,pjsk-fidelity" }
+pjsk-core = { path = "../pjsk-core" }
+pjsk-ir = { path = "../pjsk-ir" }
+pjsk-assets = { path = "../pjsk-assets" }
+pjsk-scenario = { path = "../pjsk-scenario" }
+pjsk-timeline = { path = "../pjsk-timeline" }
+pjsk-bake = { path = "../pjsk-bake" }
+pjsk-render = { path = "../pjsk-render" }
+pjsk-export = { path = "../pjsk-export" }
+pjsk-fidelity = { path = "../pjsk-fidelity" }
 
 [lints]
 workspace = true

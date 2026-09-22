@@ -83,6 +83,24 @@ PlayCover 窗口无刘海，`Screen.safeArea` 大概率等于全屏，**safe are
 
 ---
 
+## 后续决策（2026-09-22，工程设施层）
+
+| # | 议题 | 决策 | 落地位置 |
+|---|---|---|---|
+| Q19 | 开源许可证 | **AGPL-3.0-or-later** + Live2D Cubism Core 链接例外 | `LICENSE`、`LICENSE-EXCEPTION`、[ADR-0002](adr/0002-license.md) |
+| Q20 | 二进制 fixture 存储 | **Git LFS** | `.gitattributes`、[`testing.md`](testing.md) |
+| Q21 | CI | **暂不启用**，配置保留为手动触发；测试全部本地执行 | `.github/workflows/ci.yml`、[`testing.md`](testing.md) |
+| Q22 | 项目语言 | **代码 English / 设计文档中文 / 门面双语** | [`conventions/language.md`](conventions/language.md) |
+
+### Q19 注记：AGPL 与闭源库的兼容性
+
+AGPL 要求分发「组合作品」时提供全部对应源码，而 Live2D Cubism Core 是闭源静态库。
+**只分发源码没有问题**（用户自行链接不构成分发），但分发已链接的二进制会与 AGPL 冲突。
+因此增加了 `LICENSE-EXCEPTION`（AGPL 第 7 条允许的附加许可）。
+若将来接受外部贡献，贡献者须同意其代码同样适用该例外——已写入 `CONTRIBUTING.md`。
+
+---
+
 ## 配套规约
 
 Q1–Q18 的执行细则已拆分为以下规约文档，**它们与本文件具有同等约束力**：
@@ -96,4 +114,5 @@ Q1–Q18 的执行细则已拆分为以下规约文档，**它们与本文件具
 | [`reverse/workflow.md`](reverse/workflow.md) | Q16（版本锁定 + 手动适配） |
 | [`versioning.md`](versioning.md) | Q16 |
 | [`testing.md`](testing.md) | Q2 / Q14 |
-| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Q17 / Q18 |
+| [`conventions/language.md`](conventions/language.md) | Q22 |
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Q17 / Q18 / Q19 / Q22 |

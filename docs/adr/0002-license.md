@@ -1,27 +1,53 @@
-# ADR-0002: 开源许可证
+# ADR-0002: 开源许可证 / Open-source licence
 
-- **状态**：⚠️ **proposed（待定，需项目所有者决策）**
-- **日期**：2026-09-22
-- **相关**：decisions.md Q17
+- **状态 / Status**：accepted
+- **日期 / Date**：2026-09-22
+- **相关 / Related**：decisions.md Q17
 
-## 背景
+## 决策 / Decision
 
-决策 Q17 选择「开源代码，资产由用户自备」。需要确定许可证。
+**AGPL-3.0-or-later**，外加一条针对 Live2D Cubism Core 的链接例外（见下）。
 
-约束：
+`LICENSE` 为 GNU AGPL v3 官方全文；`Cargo.toml` 的 `license` 字段为 `AGPL-3.0-or-later`。
 
-1. Rust 生态惯例是 `MIT OR Apache-2.0` 双许可
-2. 本项目会链接 **Live2D Cubism Core**（闭源静态库，C ABI）。Live2D 对 SDK 的使用与再分发有独立的授权条款，需要确认：
-   - 本仓库能否包含 Cubism Core 二进制（**倾向：不包含**，由用户自行下载）
-   - 项目许可证是否与 Live2D 条款冲突
-3. 项目本身不分发游戏资产，这部分无冲突
+## 背景 / Context
 
-## 待决事项
+决策 Q17 选择「开源代码，资产由用户自备」。项目不分发游戏资产，也不分发 Live2D Cubism SDK 二进制。
 
-- [ ] 确认 Live2D Cubism SDK 的授权条款对本项目形态（开源工具、非商用、不分发 SDK 二进制）的要求
-- [ ] 确定许可证，更新 `Cargo.toml` 的 `license` 字段与 `LICENSE` 文件
-- [ ] 在 README 中明确：Cubism Core 需用户自行获取并同意 Live2D 条款
+## ⚠️ AGPL 与 Cubism Core 的兼容性问题
 
-## 当前占位
+这是本 ADR 的核心，**必须在首次对外发布二进制前解决**。
 
-`Cargo.toml` 暂填 `MIT OR Apache-2.0`，**在本 ADR 转为 accepted 前不得对外发布**。
+Live2D Cubism Core 是**闭源静态库**，其许可证与 (A)GPL 不兼容。AGPL-3.0 要求：分发「组合作品」时，必须以 AGPL 提供**全部对应源码**。Cubism Core 无法满足这一点，且它不属于 GPL 的「系统库」例外。
+
+因此：
+
+| 场景 | 是否有问题 |
+|---|---|
+| 本项目**只分发源码**，用户自行获取 Cubism Core 并自行编译 | ✅ 无问题。用户为自己编译不构成「分发」 |
+| 任何人分发**已链接 Cubism Core 的编译产物** | ❌ 构成分发组合作品，与 AGPL 冲突 |
+
+### 采取的措施：附加许可（GPL §7 additional permission）
+
+在 `LICENSE` 之外增加一份 `LICENSE-EXCEPTION`，作为 AGPL-3.0 第 7 条允许的附加许可：
+
+> 作为额外许可，版权持有者授权你将本程序与 Live2D Cubism Core（或其衍生库）链接并分发由此产生的可执行文件，而不因此要求 Live2D Cubism Core 本身遵循 AGPL 的条款。
+
+- 该例外**只能由版权持有者授予**。若将来接受外部贡献，贡献者须同意其代码同样适用此例外（写进 `CONTRIBUTING.md`）。
+- 该例外**不豁免** Live2D 自身的授权条款——使用者仍须自行取得 Cubism SDK 并遵守其许可。
+
+### AGPL §13（网络条款）
+
+若有人将本工具作为网络服务提供（例如在线剧情渲染站点），其用户有权取得对应源码。这符合项目意图，无需额外处理，但需在 README 中说明。
+
+## 后果 / Consequences
+
+- 正面：衍生的在线服务也必须开源；与「资产不分发」的定位一致
+- 负面：AGPL 会劝退部分商业集成方——这与 Q17 的非商用定位一致，视为可接受
+- 待办：贡献者协议中须包含对链接例外的同意条款
+
+## 复审条件 / Review triggers
+
+- Live2D 变更 Cubism Core 的授权条款
+- 项目开始接受外部代码贡献（需先落实贡献者对例外条款的同意）
+- 计划分发编译好的二进制（届时须确认例外条款文本已就位）

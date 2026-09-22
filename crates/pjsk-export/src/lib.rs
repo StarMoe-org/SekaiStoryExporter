@@ -1,9 +1,12 @@
-//! # pjsk-export — 导出与编码
+//! # pjsk-export -- readback, encoding and muxing
 //!
-//! ## 职责
-//! - 异步回读流水线（三缓冲 staging；Windows/PCIe 上是性能关键，macOS 统一内存上不是）
-//! - 输出形态（Q15，全部为参数开关）：mp4 直出 / 无损帧序列 / BLAKE3 帧哈希 / 分层 / draw call dump（窄条件触发）
-//! - 离线混音：时间轴 → ffmpeg `filter_complex` → 与视频流 mux
+//! ## Responsibilities
+//! - Asynchronous readback pipeline (triple-buffered staging). This is performance-critical
+//!   on Windows/PCIe and nearly free on Apple Silicon's unified memory
+//! - Output forms (decision Q15, all behind flags): mp4, lossless frame sequence,
+//!   BLAKE3 frame hashes, layered output, draw-call dumps (narrowly triggered only)
+//! - Offline audio mixing: timeline -> ffmpeg `filter_complex` -> mux with the video stream
 //!
-//! ## 验收载体
-//! 逐帧 BLAKE3 哈希，**不在 mp4 层面比对**（见 `docs/spec/tolerance.md`）。
+//! ## Verification carrier
+//! Per-frame BLAKE3 hashes. Comparison never happens at the mp4 level -- see
+//! `docs/spec/tolerance.md`.

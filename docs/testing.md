@@ -17,12 +17,16 @@
 
 **GitHub 托管 runner 没有 NVIDIA 独显**，因此 T1（macOS vs Windows 的 GPU 渲染比对）**无法在托管 CI 上进行**。
 
-可选方案（待定，见 `adr/` 待补）：
-- 自建 Windows runner（有 NVIDIA 卡）+ macOS runner
-- 约定 T1 在本地跑，PR 附帧哈希报告
-- 托管 CI 只跑 L0/L1 和编译，L3 走人工门禁
+**当前决策（2026-09-22）：CI 暂不启用。** `.github/workflows/ci.yml` 保留为配置，
+仅允许 `workflow_dispatch` 手动触发。
 
-在方案确定前，**动渲染路径的 PR 必须附本地 T1 报告**（见 `CONTRIBUTING.md`）。
+因此目前**所有测试层都在本地执行**：
+
+- 提交前自行跑 `cargo fmt --check`、`cargo clippy --workspace --all-targets`、`cargo test --workspace`
+- **动渲染路径的 PR 必须附本地 T1 报告**（见 `CONTRIBUTING.md`）
+
+将来启用 CI 时，把 ci.yml 中的 `push` / `pull_request` 触发器取消注释即可跑 L0/L1；
+T1 仍需自建带 NVIDIA 卡的 runner。
 
 ## 为什么 L2 是关键一层
 
@@ -42,15 +46,16 @@ fixture 分两类，处理方式不同：
 | 类型 | 例子 | 体积 | 存放 |
 |---|---|---|---|
 | 结构化 | UI 布局 dump、参数表片段、oracle 期望值 | 小（KB～MB），可 diff | 直接入库，JSON/YAML |
-| 二进制 | 参考帧图像 | 大（MB/帧） | ⚠️ **待定** |
+| 二进制 | 参考帧图像 | 大（MB/帧） | **Git LFS**（决策 2026-09-22） |
 
-二进制 fixture 的选项（需决策）：
-1. Git LFS
-2. 独立 fixture 仓库 + 版本引用
-3. **只存裁剪区域**而非整帧（对话框区、角色区各一小块）+ 存哈希
-4. 不入库，本地生成，CI 只校验哈希
+`.gitattributes` 已把 `tests/fixtures/**/*.{png,exr,bin,zst}` 纳入 LFS 管理；
+`tests/fixtures/**/*.{json,yaml}` 保持普通文本以便 diff。
 
-方案 3 + 4 组合在本项目可能最实用：日常靠哈希，出问题时本地重现完整帧。
+克隆后需执行一次 `git lfs install`（本仓库已配置 `--local` hooks）。
+
+> **仍建议控制体积**：即便有 LFS，也优先只存**裁剪区域**（对话框区、角色区各一小块）
+> 而非整帧，并以逐帧哈希作为日常判据。完整帧只在排查时本地重现。
+> LFS 解决的是「能存」，不解决「该存多少」。
 
 ## 测试命名约定
 
