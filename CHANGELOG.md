@@ -21,7 +21,7 @@ together with its fidelity impact.
 - Q19 许可证 = AGPL-3.0-or-later（+ 链接例外）
 - Q20 二进制 fixture = Git LFS
 - Q21 CI = 暂不启用，仅手动触发
-- Q22 项目语言 = 代码英文 / 设计文档中文 / 门面双语
+- Q22 项目语言 = 代码与 commit 英文 / PR·Issue 中英皆可 / 设计文档中文 / 门面双语
 
 ### 待定 / Open
 - `docs/spec/ir.md`、`docs/spec/param-table.md` 尚未设计

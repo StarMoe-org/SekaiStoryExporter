@@ -1,8 +1,10 @@
 # Contributing / 贡献指南
 
-> Language policy: code and Git history in English, design docs in Chinese, entry
-> points bilingual. See [`docs/conventions/language.md`](docs/conventions/language.md).
-> 语言规约：代码与 Git 历史用英文，设计文档用中文，门面文档双语。
+> Language policy: code and commit messages in English; **pull requests and issues in
+> either language**; design docs in Chinese; entry points bilingual.
+> See [`docs/conventions/language.md`](docs/conventions/language.md).
+>
+> 语言规约：代码与 commit 用英文；**PR 与 Issue 中英皆可**；设计文档用中文；门面文档双语。
 
 ---
 
@@ -34,7 +36,8 @@ Environment:
 
 - `main` is protected; everything goes through a PR.
 - Branch names: `feat/<scope>-<short>`, `fix/...`, `docs/...`, `re/...` (reverse engineering).
-- Conventional Commits, **scope is the crate name**, message in English:
+- Conventional Commits, **scope is the crate name**, message in English
+  (PRs and issues may be written in either Chinese or English):
 
   ```
   feat(pjsk-ugui): implement CanvasScaler MatchWidthOrHeight mode
@@ -122,7 +125,8 @@ working binary. See [ADR-0002](docs/adr/0002-license.md).
 ### 分支与提交
 
 `main` 受保护，一律走 PR。分支名 `feat/<scope>-<短描述>` 等。
-Commit 遵循 Conventional Commits，**scope 用 crate 名，正文用英文**（见语言规约）。
+Commit 遵循 Conventional Commits，**scope 用 crate 名，正文用英文**。
+**PR 与 Issue 的正文中英皆可**——用你能把问题说清楚的那种语言（见语言规约）。
 
 ### CI 未启用
 

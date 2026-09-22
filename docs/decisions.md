@@ -90,7 +90,7 @@ PlayCover 窗口无刘海，`Screen.safeArea` 大概率等于全屏，**safe are
 | Q19 | 开源许可证 | **AGPL-3.0-or-later** + Live2D Cubism Core 链接例外 | `LICENSE`、`LICENSE-EXCEPTION`、[ADR-0002](adr/0002-license.md) |
 | Q20 | 二进制 fixture 存储 | **Git LFS** | `.gitattributes`、[`testing.md`](testing.md) |
 | Q21 | CI | **暂不启用**，配置保留为手动触发；测试全部本地执行 | `.github/workflows/ci.yml`、[`testing.md`](testing.md) |
-| Q22 | 项目语言 | **代码 English / 设计文档中文 / 门面双语** | [`conventions/language.md`](conventions/language.md) |
+| Q22 | 项目语言 | **代码与 commit 用 English；PR/Issue 中英皆可；设计文档中文；门面双语** | [`conventions/language.md`](conventions/language.md) |
 
 ### Q19 注记：AGPL 与闭源库的兼容性
 

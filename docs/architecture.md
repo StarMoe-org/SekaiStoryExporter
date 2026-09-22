@@ -46,7 +46,7 @@ pjskChatGenerator/
 │   ├── versioning.md             版本策略 + 游戏更新适配 checklist
 │   ├── conventions/
 │   │   ├── determinism.md        确定性规约（D 级自动 / R 级人工）
-│   │   └── language.md           语言规约（代码英文 / 文档中文）
+│   │   └── language.md           语言规约（代码英文 / PR·Issue 双语 / 文档中文）
 │   ├── spec/
 │   │   ├── tolerance.md          容差规范 v1（T1 / T2）
 │   │   ├── coordinate-systems.md 7 套坐标系 + 时间基规约

@@ -32,7 +32,7 @@
 | | [`docs/reverse/workflow.md`](docs/reverse/workflow.md) | 逆向工作流与 provenance 规约 |
 | | [`docs/reverse/open-questions.md`](docs/reverse/open-questions.md) | 待确认事实清单 |
 | | [`docs/versioning.md`](docs/versioning.md) | 版本策略与游戏更新适配 checklist |
-| | [`docs/conventions/language.md`](docs/conventions/language.md) | 语言规约（代码英文 / 文档中文 / 门面双语） |
+| | [`docs/conventions/language.md`](docs/conventions/language.md) | 语言规约（代码与 commit 英文 / PR·Issue 中英皆可 / 设计文档中文） |
 | | [`docs/risks.md`](docs/risks.md) | 已知风险登记 |
 | | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 协作流程与 PR 清单 |
 
@@ -85,5 +85,5 @@ accept their terms. The project is AGPL-3.0-or-later with an additional permissi
 allowing linking against Cubism Core -- see [`LICENSE-EXCEPTION`](LICENSE-EXCEPTION)
 and [ADR-0002](docs/adr/0002-license.md).
 
-Design documents live under `docs/` and are written in Chinese; code, commit messages
-and issues are in English. See [`docs/conventions/language.md`](docs/conventions/language.md).
+Design documents live under `docs/` and are written in Chinese; code and commit
+messages are in English. **Pull requests and issues are welcome in either language.** See [`docs/conventions/language.md`](docs/conventions/language.md).
