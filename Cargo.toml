@@ -7,7 +7,7 @@ version      = "0.0.0"
 edition      = "2024"
 rust-version = "1.98"          # 与 rust-toolchain.toml 保持一致
 license      = "AGPL-3.0-or-later"   # 见 docs/adr/0002-license.md
-repository   = "https://github.com/TODO/pjskChatGenerator"
+repository   = "https://github.com/StarMoe-org/SekaiStoryExporter"
 
 [workspace.lints.rust]
 unsafe_code = "warn"           # 仅 pjsk-live2d 的 FFI 层允许，需 #[allow] + 安全性注释
