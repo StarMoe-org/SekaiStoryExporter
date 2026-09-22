@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+version      = "0.0.0"
+edition      = "2024"
+rust-version = "1.89"          # 与 rust-toolchain.toml 保持一致
+license      = "MIT OR Apache-2.0"   # TODO: 见 docs/adr/0002-license.md
+repository   = "https://github.com/TODO/pjskChatGenerator"
+
+[workspace.lints.rust]
+unsafe_code = "warn"           # 仅 pjsk-live2d 的 FFI 层允许，需 #[allow] + 安全性注释
+
+[workspace.lints.clippy]
+disallowed_types  = "deny"     # 见 clippy.toml —— 确定性规约的编译期防线
+disallowed_methods = "deny"
+
+# 所有 profile 统一，避免 debug/release 产出不同结果（确定性规约 D-12）
+[profile.release]
+debug = 1
+
+[profile.bench]
+inherits = "release"

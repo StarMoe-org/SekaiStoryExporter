@@ -1,0 +1,22 @@
+# 确定性规约的自动化防线。详见 docs/conventions/determinism.md
+# 每一条都对应一个真实的不确定性来源，不是风格偏好。
+
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "迭代顺序随机化 → draw call 顺序不确定。用 BTreeMap 或 IndexMap" },
+  { path = "std::collections::HashSet", reason = "同上。用 BTreeSet 或 IndexSet" },
+  { path = "std::time::Instant",        reason = "渲染路径禁止实时时钟。时间只能来自帧号" },
+  { path = "std::time::SystemTime",     reason = "同上" },
+]
+
+disallowed-methods = [
+  { path = "std::fs::read_dir",   reason = "返回顺序由文件系统决定。必须收集后排序，请用 pjsk_core::fs::read_dir_sorted" },
+  { path = "f32::sin",  reason = "std 调用系统 libm，macOS 与 Windows 实现不同。用 pjsk_core::det_math" },
+  { path = "f32::cos",  reason = "同上" },
+  { path = "f32::tan",  reason = "同上" },
+  { path = "f32::exp",  reason = "同上" },
+  { path = "f32::ln",   reason = "同上" },
+  { path = "f32::powf", reason = "同上" },
+  { path = "f64::sin",  reason = "同上" },
+  { path = "f64::cos",  reason = "同上" },
+  { path = "f64::powf", reason = "同上" },
+]

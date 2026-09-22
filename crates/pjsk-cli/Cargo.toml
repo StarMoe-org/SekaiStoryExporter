@@ -1,0 +1,12 @@
+[package]
+name = "pjsk-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pjsk-core,pjsk-ir,pjsk-assets,pjsk-scenario,pjsk-timeline,pjsk-bake,pjsk-render,pjsk-export,pjsk-fidelity = { path = "../pjsk-core,pjsk-ir,pjsk-assets,pjsk-scenario,pjsk-timeline,pjsk-bake,pjsk-render,pjsk-export,pjsk-fidelity" }
+
+[lints]
+workspace = true

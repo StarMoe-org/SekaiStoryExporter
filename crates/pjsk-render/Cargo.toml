@@ -1,0 +1,12 @@
+[package]
+name = "pjsk-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pjsk-core,pjsk-assets,pjsk-live2d,pjsk-ugui,pjsk-text = { path = "../pjsk-core,pjsk-assets,pjsk-live2d,pjsk-ugui,pjsk-text" }
+
+[lints]
+workspace = true

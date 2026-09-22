@@ -1,0 +1,6 @@
+# 长期项目：工具链必须钉死版本。
+# 升级工具链 = 一次可能改变浮点/优化行为的变更，须走 ADR 并重跑 fidelity 全量回归。
+[toolchain]
+channel    = "1.89.0"          # TODO: 首次 setup 时改为当时的实际 stable 版本
+components = ["rustfmt", "clippy"]
+targets    = ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"]

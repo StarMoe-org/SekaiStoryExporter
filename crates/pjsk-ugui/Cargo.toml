@@ -1,0 +1,12 @@
+[package]
+name = "pjsk-ugui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pjsk-core,pjsk-assets = { path = "../pjsk-core,pjsk-assets" }
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+/target
+**/*.rs.bk
+
+# 资产：任何情况下都不入库（见 README 法律边界）
+/assets/
+/cache/
+
+# 渲染产物
+/out/
+*.mp4
+*.mov
+*.wav
+*.png
+!docs/**/*.png
+
+# 逆向中间产物（体积大且含游戏代码，只提交提炼后的 constants.yaml）
+/dumps/
+tools/dumper/out/
+
+.DS_Store
