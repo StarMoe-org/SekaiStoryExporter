@@ -14,7 +14,7 @@
 
 | 项目版本 | 游戏 region | 游戏版本 | 状态 |
 |---|---|---|---|
-| 0.0.0 | — | — | 未开始 |
+| 0.0.0 | cn | 6.4.0 (Unity 2022.3.62f3) | 逆向阶段：剧本层已还原，见 [`docs/reverse/versions/cn-6.4.0/`](docs/reverse/versions/cn-6.4.0/) |
 
 ## 文档导航
 
@@ -32,6 +32,7 @@
 | | [`docs/reverse/workflow.md`](docs/reverse/workflow.md) | 逆向工作流与 provenance 规约 |
 | | [`docs/reverse/work-order.md`](docs/reverse/work-order.md) | ⭐ 逆向工作单：需要从游戏中取得的内容 |
 | | [`docs/reverse/open-questions.md`](docs/reverse/open-questions.md) | 待确认事实清单 |
+| | [`docs/reverse/versions/cn-6.4.0/`](docs/reverse/versions/cn-6.4.0/) | ⭐ **逆向结论**：枚举、常量、坐标映射、状态机、特效语义 |
 | | [`docs/versioning.md`](docs/versioning.md) | 版本策略与游戏更新适配 checklist |
 | | [`docs/conventions/language.md`](docs/conventions/language.md) | 语言规约（代码与 commit 英文 / PR·Issue 中英皆可 / 设计文档中文） |
 | | [`docs/risks.md`](docs/risks.md) | 已知风险登记 |
