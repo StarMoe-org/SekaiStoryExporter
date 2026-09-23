@@ -99,6 +99,14 @@ AGPL 要求分发「组合作品」时提供全部对应源码，而 Live2D Cubi
 因此增加了 `LICENSE-EXCEPTION`（AGPL 第 7 条允许的附加许可）。
 若将来接受外部贡献，贡献者须同意其代码同样适用该例外——已写入 `CONTRIBUTING.md`。
 
+### Q23 · 项目改名（2026-09-23）
+
+| # | 议题 | 决策 | 落地位置 |
+|---|---|---|---|
+| Q23 | 项目名称 | 由 `pjskChatGenerator` 改为 **SekaiStoryExporter**，缩写 **sse** | 仓库名、crate 前缀 `sse-*`、Rust 路径 `sse_*`、CLI 可执行名 `sse`；见 [`spec/glossary.md`](spec/glossary.md) |
+
+注记：`PJSK` 保留为游戏本身的称呼，不再出现在任何标识符中。外部站点名（如 `pjsk.moe`）不属于本项目命名，原样保留。
+
 ---
 
 ## 配套规约

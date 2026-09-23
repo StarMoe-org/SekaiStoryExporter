@@ -1,0 +1,14 @@
+[package]
+name = "sse-text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sse-core = { path = "../sse-core" }
+sse-assets = { path = "../sse-assets" }
+sse-ugui = { path = "../sse-ugui" }
+
+[lints]
+workspace = true

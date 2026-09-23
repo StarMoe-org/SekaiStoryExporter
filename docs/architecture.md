@@ -33,7 +33,7 @@ Live2D 的 motion fade 与 physics 是累积状态，不能任意 seek。但**�
 ## 仓库结构
 
 ```
-pjskChatGenerator/
+SekaiStoryExporter/
 ├── Cargo.toml               workspace（13 crate + xtask）
 ├── clippy.toml              ⭐ 确定性规约的编译期防线
 ├── rust-toolchain.toml      工具链钉版本 + 双平台 target
@@ -74,22 +74,22 @@ pjskChatGenerator/
 ### crate 依赖约束
 
 ```
-pjsk-core            ← 无 pjsk-* 依赖（坐标系 newtype / det_math / 时间基）
-pjsk-ir              ← core
-pjsk-assets          ← core
-pjsk-scenario        ← core, ir, assets
-pjsk-timeline        ← core, ir, assets
-pjsk-live2d          ← core, assets          （唯一允许 unsafe 的 crate）
-pjsk-ugui            ← core, assets
-pjsk-text            ← core, assets, ugui
-pjsk-bake            ← 以上大部分          （Pass 1）
-pjsk-render          ← core, assets, live2d, ugui, text   （Pass 2）
-pjsk-export          ← core, render
-pjsk-fidelity        ← core
-pjsk-cli             ← 全部
+sse-core            ← 无 sse-* 依赖（坐标系 newtype / det_math / 时间基）
+sse-ir              ← core
+sse-assets          ← core
+sse-scenario        ← core, ir, assets
+sse-timeline        ← core, ir, assets
+sse-live2d          ← core, assets          （唯一允许 unsafe 的 crate）
+sse-ugui            ← core, assets
+sse-text            ← core, assets, ugui
+sse-bake            ← 以上大部分          （Pass 1）
+sse-render          ← core, assets, live2d, ugui, text   （Pass 2）
+sse-export          ← core, render
+sse-fidelity        ← core
+sse-cli             ← 全部
 ```
 
-> **铁律**：`pjsk-render` 不得依赖 `pjsk-timeline` 或 `pjsk-scenario`。
+> **铁律**：`sse-render` 不得依赖 `sse-timeline` 或 `sse-scenario`。
 > 渲染只认参数表。这条依赖约束是 Pass 2 无状态性的结构保证，破坏它等于破坏 Q14 架构。
 
 

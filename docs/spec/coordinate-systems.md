@@ -27,7 +27,7 @@
 规则：
 1. 布局、时间轴、参数表中的一切位置量**一律以 `UnityScreen` 存储**。
 2. 只在提交给 GPU 的最后一步转换到 `Ndc`，在写出帧的最后一步转换到 `ImagePixel`。
-3. `L2dCanvas → UnityScreen` 的变换由 `pjsk-live2d` 负责并且只做一次。
+3. `L2dCanvas → UnityScreen` 的变换由 `sse-live2d` 负责并且只做一次。
 
 ## 强制约定
 
@@ -36,7 +36,7 @@
 坐标量必须使用带空间标记的 newtype，不得用裸 `f32` / `[f32; 2]` 传递：
 
 ```rust
-// pjsk-core::space
+// sse-core::space
 pub struct Point<S: Space> { pub x: f32, pub y: f32, _s: PhantomData<S> }
 pub struct Rect<S: Space>  { /* ... */ }
 
@@ -47,7 +47,7 @@ pub struct UnityScreen; pub struct ImagePixel; pub struct Ndc; /* ... */
 
 ### 2. 转换只有一处实现
 
-所有跨坐标系转换必须走 `pjsk_core::space::convert`。**禁止在业务代码里手写 `y = height - y`** ——这行代码在本项目里有四种不同的正确写法和无数种错误写法。
+所有跨坐标系转换必须走 `sse_core::space::convert`。**禁止在业务代码里手写 `y = height - y`** ——这行代码在本项目里有四种不同的正确写法和无数种错误写法。
 
 ### 3. 命名带空间后缀
 
@@ -72,7 +72,7 @@ pub struct UnityScreen; pub struct ImagePixel; pub struct Ndc; /* ... */
 规则：
 
 1. **时间的唯一权威是帧号。** 秒数只能由帧号派生，**禁止反向**（用秒数算回帧号会引入舍入歧义）。
-2. 时间轴编译器（`pjsk-timeline`）内部可以用秒计算，但**输出必须量化到帧号**，量化规则写进 `spec/ir.md` 并固定（建议 `round`，一次性定死）。
+2. 时间轴编译器（`sse-timeline`）内部可以用秒计算，但**输出必须量化到帧号**，量化规则写进 `spec/ir.md` 并固定（建议 `round`，一次性定死）。
 3. 渲染路径不得出现任何实时时钟（见 `conventions/determinism.md` D-2）。
 4. `fps` 是导出配置的一部分，进入帧哈希的计算输入——**不同 fps 的输出不可互相比对**。
 

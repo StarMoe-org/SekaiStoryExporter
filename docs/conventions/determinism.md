@@ -6,9 +6,9 @@
 
 ## 适用范围
 
-**受约束**（渲染路径）：`pjsk-render`、`pjsk-bake`、`pjsk-live2d`、`pjsk-ugui`、`pjsk-text`、`pjsk-core`
+**受约束**（渲染路径）：`sse-render`、`sse-bake`、`sse-live2d`、`sse-ugui`、`sse-text`、`sse-core`
 
-**不受约束**：`pjsk-cli` 的日志与进度显示、`pjsk-assets` 的网络抓取、`tools/*`
+**不受约束**：`sse-cli` 的日志与进度显示、`sse-assets` 的网络抓取、`tools/*`
 
 判据：**凡是其输出会影响到某一帧像素的代码，一律受约束。**
 
@@ -25,10 +25,10 @@
 |---|---|---|---|
 | D-1 | 禁用 `HashMap` / `HashSet` | Rust 的迭代顺序随机化 → **draw call 顺序不确定 → 同机两次运行结果不同**。这比跨平台差异难查十倍 | `clippy.toml` disallowed-types |
 | D-2 | 禁用 `Instant` / `SystemTime` | 渲染路径不得有实时时钟。时间只能来自帧号（见 `spec/coordinate-systems.md` 时间基一节） | 同上 |
-| D-3 | 禁用 `std::fs::read_dir` | 返回顺序由文件系统决定。用 `pjsk_core::fs::read_dir_sorted` | disallowed-methods |
-| D-4 | 禁用 `std` 的超越函数（`sin/cos/tan/exp/ln/powf`…） | `std` 调用系统 libm，macOS 与 Windows 实现不同 → 结果不同。用 `pjsk_core::det_math`（基于 `libm` crate，纯 Rust 实现，跨平台一致） | disallowed-methods |
+| D-3 | 禁用 `std::fs::read_dir` | 返回顺序由文件系统决定。用 `sse_core::fs::read_dir_sorted` | disallowed-methods |
+| D-4 | 禁用 `std` 的超越函数（`sin/cos/tan/exp/ln/powf`…） | `std` 调用系统 libm，macOS 与 Windows 实现不同 → 结果不同。用 `sse_core::det_math`（基于 `libm` crate，纯 Rust 实现，跨平台一致） | disallowed-methods |
 | D-5 | 所有 profile 的优化行为一致 | 避免 debug 与 release 产出不同像素 | workspace `Cargo.toml` profile 统一 |
-| D-6 | `unsafe` 仅允许出现在 `pjsk-live2d` 的 FFI 层 | 其余地方的 `unsafe` 容易引入未定义行为 → 不可复现 | workspace lint `unsafe_code = "warn"` + 评审 |
+| D-6 | `unsafe` 仅允许出现在 `sse-live2d` 的 FFI 层 | 其余地方的 `unsafe` 容易引入未定义行为 → 不可复现 | workspace lint `unsafe_code = "warn"` + 评审 |
 
 ---
 
@@ -75,6 +75,6 @@
 
 ## 回归方式
 
-T1 的验收载体是逐帧 BLAKE3 哈希。两端跑同一份参数表，比对帧哈希；不一致则进入 `pjsk-fidelity` 的形态分类流程。
+T1 的验收载体是逐帧 BLAKE3 哈希。两端跑同一份参数表，比对帧哈希；不一致则进入 `sse-fidelity` 的形态分类流程。
 
 ⚠️ **CI 限制**：GitHub 托管 runner 没有 NVIDIA 独显，**T1 无法在托管 CI 上跑真实 GPU 比对**。需要自建 runner 或约定本地跑。见 `testing.md`。

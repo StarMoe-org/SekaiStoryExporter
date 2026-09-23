@@ -1,0 +1,20 @@
+[package]
+name = "sse-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sse-core = { path = "../sse-core" }
+sse-ir = { path = "../sse-ir" }
+sse-assets = { path = "../sse-assets" }
+sse-scenario = { path = "../sse-scenario" }
+sse-timeline = { path = "../sse-timeline" }
+sse-bake = { path = "../sse-bake" }
+sse-render = { path = "../sse-render" }
+sse-export = { path = "../sse-export" }
+sse-fidelity = { path = "../sse-fidelity" }
+
+[lints]
+workspace = true

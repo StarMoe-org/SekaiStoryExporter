@@ -62,8 +62,8 @@ fixture 分两类，处理方式不同：
 ```
 L0:  crates/<crate>/src/**/tests.rs      或 tests/
 L1:  crates/<crate>/tests/oracle_*.rs
-L2:  crates/pjsk-bake/tests/param_*.rs
-L3:  crates/pjsk-fidelity/tests/         + CLI 子命令 `pjsk diff`
+L2:  crates/sse-bake/tests/param_*.rs
+L3:  crates/sse-fidelity/tests/         + CLI 子命令 `sse diff`
 L4:  tests/smoke/
 ```
 

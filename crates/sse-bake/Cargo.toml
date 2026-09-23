@@ -1,0 +1,18 @@
+[package]
+name = "sse-bake"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sse-core = { path = "../sse-core" }
+sse-ir = { path = "../sse-ir" }
+sse-assets = { path = "../sse-assets" }
+sse-timeline = { path = "../sse-timeline" }
+sse-live2d = { path = "../sse-live2d" }
+sse-ugui = { path = "../sse-ugui" }
+sse-text = { path = "../sse-text" }
+
+[lints]
+workspace = true
