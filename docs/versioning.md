@@ -33,7 +33,7 @@ docs/reverse/versions/
 游戏更新后按顺序执行。**不要跳步**——跳过的步骤会在三个月后以「某个分辨率下对话框偏了 2px」的形式回来。
 
 - [ ] 1. 记录新的游戏版本号与资产版本号
-- [ ] 2. 重跑 `tools/fetch`，比对 `assets.lock` 差异，列出新增/变更资产
+- [ ] 2. 用新版本重跑 SekaiStoryRipper（`ripper rip`），比对 `ripper.lock.json` 差异，列出新增/变更资产；如 Ripper 输出格式升版，同步升级 `ripper-format` tag（Q26）
 - [ ] 3. 重跑 `tools/dumper` 的 UI 层次导出，与上一版布局基线做**结构化 diff**（不是看截图）
 - [ ] 4. 重跑全量剧本统计，检查是否出现新的 `SpecialEffectType` 或新的 Action 值
 - [ ] 5. 复核 `constants.yaml` 中 `confidence: low` 的条目——它们最可能失效

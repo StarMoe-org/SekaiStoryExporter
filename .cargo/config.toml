@@ -1,2 +1,6 @@
 [alias]
 xtask = "run --package xtask --"
+
+# The ripper-format dependency is fetched over SSH; let the system git use the SSH agent.
+[net]
+git-fetch-with-cli = true

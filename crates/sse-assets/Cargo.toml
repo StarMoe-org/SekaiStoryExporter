@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 sse-core = { path = "../sse-core" }
+ripper-format.workspace = true
 
 [lints]
 workspace = true
