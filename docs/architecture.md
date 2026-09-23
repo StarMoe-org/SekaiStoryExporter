@@ -39,7 +39,7 @@ SekaiStoryExporter/
 ├── rust-toolchain.toml      工具链钉版本 + 双平台 target
 │
 ├── docs/
-│   ├── decisions.md              ⭐ 架构决策（Q1–Q31），单一事实来源
+│   ├── decisions.md              ⭐ 架构决策（Q1–Q39），单一事实来源
 │   ├── architecture.md           本文件
 │   ├── risks.md                  已知风险登记（R1 Live2D 语义偏差…）
 │   ├── testing.md                五层测试策略

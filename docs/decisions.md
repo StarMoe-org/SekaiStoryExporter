@@ -3,7 +3,7 @@
 > 本文件是项目的单一事实来源。任何与此冲突的代码或文档以本文件为准。
 > 决策变更时**追加修订条目**，不要原地覆盖——历史上下文本身有价值。
 
-状态：v2（Round 1–6 完成；Q28 待 PlayCover 实测）
+状态：v3（Round 1–7 完成）
 
 ---
 
@@ -21,7 +21,7 @@
 | Q8 | Live2D 语义 | ~~照搬 **Cubism Native Framework** 语义，用 Rust 重写~~ → **被 Q24 取代** | R1 已成立，见 `risks.md` |
 | Q9 | 分辨率范围 | **全范围**：含 safe area、含 aspect clamp | 前置工具：UI 层次 dumper（否则是人肉考古） |
 | Q10 | 内容范围 | **仅 Live2D 2D 对话剧情**，其余占位 | 待全量剧本统计出来后回看是否调整 |
-| — | 分支处理 | IR 保留分支树；导出默认走第一项，支持 `--branch` / `--all-branches` | 分支在时间轴编译阶段拍平，内核不感知 |
+| — | 分支处理 | IR 保留分支树；导出默认走第一项，支持 `--branch` / `--all-branches` | 分支在时间轴编译阶段拍平，内核不感知。**Q36 细化**：只有 Action=5 产生分支 |
 | Q11 | 文本 | atlas 优先 + 游戏自带 TTF 生成 SDF 作 fallback | **技巧**：hook `TryAddCharacters` 预填 atlas，力争消灭 fallback |
 | Q12 | 口型同步 | ~~**挂起**，待逆向确认游戏实现方案~~ → **被 Q27 解挂** | 见 `reverse/open-questions.md` #11 |
 | Q13 | 宿主语言 | **Rust** | 反编译的 C# 需翻译；用 .NET 跑原 C# 当测试 oracle 对冲风险 |
@@ -119,7 +119,7 @@ AGPL 要求分发「组合作品」时提供全部对应源码，而 Live2D Cubi
 | Q25 | 资产来源（细化 Q17） | sse **只消费 Ripper 的输出**（`library/` + `episodes/`），自身不含任何 CDN / 解密代码 | ABCrypt 密钥永远不进入 sse；`tools/fetch` 取消；缺资产时报错并提示 `ripper rip <selector>` |
 | Q26 | 格式依赖方式 | `ripper-format` 作 **git 依赖，钉 tag**（首个：`v0.1.0`） | 升级 tag = 一次显式变更，写 CHANGELOG；`sse-assets` 对未知 `format`/`version` 一律拒绝。仓库目前私有，构建需 SSH 访问权限 |
 | Q27 | 口型同步（解挂 Q12） | **现在实现**：有语音 → RMS 经 `a·(a+1)^powK`（powK 1.75）+ 阈值 + 三段平滑；无语音 → `LipLevels[38]` 每半字推进 | 输入为 Ripper 解出的 WAV；**HCA 解码未独立验证**，登记为 open-question #38，不阻塞实现 |
-| Q28 | 「任意分辨率」的定义（复审 Q2 / Q9） | **暂缓**，等 PlayCover 在 >1080 与 <640 高度下的实测结果再定 | 候选：A 复刻游戏钳位 [640,1080]；B = A + 超采样开关（默认关）；C 不钳位。实测前 `sse-render` 的分辨率入口按「可切换策略」设计，不写死 |
+| Q28 | 「任意分辨率」的定义（复审 Q2 / Q9） | ~~**暂缓**，等 PlayCover 实测~~ → **2026-09-24 定：严格原生，无开关**（见下方修订） | — |
 | Q29 | 动作 / 表情包解析归属 | **信任 episode 索引的 `motions` 表**；sse 只做一致性校验，不重新实现解析规则 | 规则只在 Ripper 一处实现（见其 `live2d-bundle-resolution.md`）；索引缺项 = 游戏保持上一动作，sse 照此行为 |
 | Q30 | 逆向结论的归属 | **两边各管各的，互相链接**：游戏运行时行为 → sse `docs/reverse/`；资产打包 / bundle 命名规则 → Ripper `docs/reverse/` | sse `reverse/versions/cn-6.4.0/README.md` 维护指向 Ripper 文档的链接表 |
 | Q31 | 首个里程碑 | **M1 = CPU 确定性链路**（索引 → 剧本 → IR → 时间轴 → Pass 1 参数表 → `sse inspect` / `sse params` + golden test）；**M2 = 静态首帧**（Core FFI + wgpu，单角色 PNG） | 先写 `spec/ir.md`、`spec/param-table.md`；M1 可用 RT-02 参数 dump 校验，无需 GPU |
@@ -140,11 +140,41 @@ Ripper 实测（其 `story-asset-rules.md` §0）：拼 bundle 名必须用 mast
 而非剧本 JSON 内的 `ScenarioId`（CN 有 54 话不一致，其中 24 话会静默播错语音）。
 sse 从索引拿路径，天然规避；**sse 内部任何地方都不得用剧本内 `ScenarioId` 反查资产。**
 
+#### Q28 修订（2026-09-24）· 严格原生，无开关
+
+静态逆向（[`reverse/notes/2026-09-24-render-resolution.md`](reverse/notes/2026-09-24-render-resolution.md)）更正了 Q28 的前提：
+[640,1080] 钳位**只作用于 Live 画质档**；剧情从不调用 `Screen.SetResolution`，后备缓冲 = 原生分辨率。
+
+| 决策 | 后果 |
+|---|---|
+| 输出分辨率 = 游戏的「原生屏幕」；UI / 背景 / 文字按目标分辨率原生光栅化；**角色固定渲染进 2304×1536 RT 后按 `ContentSize.y / 1024` 缩放合成**，高分辨率下的角色软化一并复刻 | `sse-render` 不做高度钳位、不做内部缩放；**不提供**角色超采样或任何非还原分辨率开关。RT 放大时的采样方式由 RT-03 帧级核对 |
+| 取消 Round 6 中「分辨率入口按可切换策略设计」的临时要求 | 只有一条分辨率路径 |
+
+PlayCover 的原生分辨率 = 窗口点数 × `customScaler`（默认 1920×1080 pt × 2 = 3840×2160），ground truth 可覆盖任意分辨率。
+运行时残留项（`Screen.dpi` 实值、IFix 热补丁）不影响剧情结论，归 RT-02 验证。
+
+---
+
+### Round 7 · IR 设计（2026-09-24）
+
+逐题结论落地在 [`spec/ir.md`](spec/ir.md)。
+
+| # | 议题 | 决策 | 关键后果 |
+|---|---|---|---|
+| Q32 | IR 抽象层级（IR-1） | **薄 IR**：规范化的带类型指令序列，保留原下标 / `ProgressBehavior` / `Delay` / 完成规则；**不含绝对时间** | 时序完全由 `sse-timeline` 模拟；语音时长不进 IR |
+| Q33 | 时间轴求解（IR-2） | **按帧模拟**：固定步长复刻 Unity 协程（`yield null`、`WaitForSeconds`、`elapsed += deltaTime` 用 f32） | 秒 → 帧不再「round 一次定死」；量化由逐帧累加自然产生。`spec/coordinate-systems.md` 时间基一节已改 |
+| Q34 | 模拟帧率与导出帧率（IR-3） | **固定按游戏帧率模拟**，导出帧**按游戏自身的帧同步策略**由模拟帧得到 | 模拟帧率数值与帧同步规则均**待逆向**（open-question #40）；确认前不写默认值 |
+| Q35 | 不支持的内容（IR-4） | `Unsupported{reason, finish, raw}`，**参与调度**，完成语义照游戏，画面占位 | 如 EffectType ≥ 45 → 立即完成；Movie 等无法静态确定的记 `ApproximateTiming` |
+| Q36 | 分支（IR-5） | **保留分支树**；**只有 Action = 5 产生 `Branch`**，其语义待逆向，暂按 Unsupported 调度并报警；SimpleSelectable (23) 是普通特效 | `--branch` / `--all-branches` 保留；open-question #41（SimpleSelectable 在自动模式下的行为）、#42（Action = 5 语义） |
+| Q37 | IR 持久化（IR-6） | Rust 类型 + 带 `ir_version` 的调试 JSON（`sse inspect`），**不承诺稳定外部格式** | 改 IR 即 bump 版本、更新 golden，不做旧版兼容 |
+| Q38 | 人工覆盖（IR-7） | **v1 不做**，1:1 复刻（含游戏自身数据错误） | 如 CostumeType `"3"` → 与游戏同样加载失败 |
+| Q39 | `{{playerName}}`（IR-8） | 配置 `player_name`，**默认 `「世界」的居民`**，`--player-name` 覆盖 | 替换在 IR 构建时完成（对应 `CreateFinalSerifBody`） |
+
 ---
 
 ## 配套规约
 
-Q1–Q31 的执行细则已拆分为以下规约文档，**它们与本文件具有同等约束力**：
+Q1–Q39 的执行细则已拆分为以下规约文档，**它们与本文件具有同等约束力**：
 
 | 规约 | 落实的决策 |
 |---|---|

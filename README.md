@@ -22,7 +22,7 @@
 
 | | 文档 | 内容 |
 |---|---|---|
-| 1 | [`docs/decisions.md`](docs/decisions.md) | ⭐ 架构决策（Q1–Q31），**单一事实来源** |
+| 1 | [`docs/decisions.md`](docs/decisions.md) | ⭐ 架构决策（Q1–Q39），**单一事实来源** |
 | 2 | [`docs/spec/glossary.md`](docs/spec/glossary.md) | 术语表，写代码前必读 |
 | 3 | [`docs/spec/coordinate-systems.md`](docs/spec/coordinate-systems.md) | 7 套坐标系 + 时间基规约，本项目最高频 bug 来源 |
 | | [`docs/architecture.md`](docs/architecture.md) | 数据流、仓库结构、crate 依赖约束、路线 |

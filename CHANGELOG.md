@@ -27,6 +27,10 @@ together with its fidelity impact.
 - Round 6（Q24–Q31）：Live2D 改为 Unity 语义（取代 Q8）；资产只来自 SekaiStoryRipper 输出，
   `ripper-format` 以 git tag 依赖；口型同步解挂；Q28 分辨率定义待 PlayCover 实测；
   M1 = CPU 确定性链路，M2 = 静态首帧。无像素影响（尚无渲染实现）
+- Q28 定为严格原生分辨率、无开关：逆向更正 [640,1080] 钳位只作用于 Live 画质档，剧情后备缓冲 = 原生分辨率，
+  角色层固定 2304×1536 RT 缩放合成。**将决定未来的像素输出**（尚无渲染实现，当前无影响）
+- Round 7（Q32–Q39）：IR v1 定稿（`docs/spec/ir.md`）——薄 IR、按帧模拟、按游戏帧率模拟（数值待逆向）、
+  Unsupported 参与调度、保留分支树（仅 Action=5）、调试 JSON、无人工覆盖、玩家名默认「「世界」的居民」
 - Q20 二进制 fixture = Git LFS
 - Q21 CI = 暂不启用，仅手动触发
 - Q22 项目语言 = 代码与 commit 英文 / PR·Issue 中英皆可 / 设计文档中文 / 门面双语
