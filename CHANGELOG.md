@@ -24,6 +24,9 @@ together with its fidelity impact.
 
 ### 决策 / Decisions
 - Q19 许可证 = AGPL-3.0-or-later（+ 链接例外）
+- Round 6（Q24–Q31）：Live2D 改为 Unity 语义（取代 Q8）；资产只来自 SekaiStoryRipper 输出，
+  `ripper-format` 以 git tag 依赖；口型同步解挂；Q28 分辨率定义待 PlayCover 实测；
+  M1 = CPU 确定性链路，M2 = 静态首帧。无像素影响（尚无渲染实现）
 - Q20 二进制 fixture = Git LFS
 - Q21 CI = 暂不启用，仅手动触发
 - Q22 项目语言 = 代码与 commit 英文 / PR·Issue 中英皆可 / 设计文档中文 / 门面双语

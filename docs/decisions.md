@@ -3,7 +3,7 @@
 > 本文件是项目的单一事实来源。任何与此冲突的代码或文档以本文件为准。
 > 决策变更时**追加修订条目**，不要原地覆盖——历史上下文本身有价值。
 
-状态：v1（Round 1–5 完成）
+状态：v2（Round 1–6 完成；Q28 待 PlayCover 实测）
 
 ---
 
@@ -18,17 +18,17 @@
 | Q5 | Ground truth | PlayCover (macOS) 跑 iOS 版，分辨率可调 | **建议 hook present 直取原始帧**，消除录屏损失 |
 | Q6 | 渲染后端 | **双端 GPU（wgpu）+ 放宽容差** | 放弃逐位一致，改为可度量容差；须执行「确定性纪律清单」 |
 | Q7 | 容差规范 | T1（跨平台）严 / T2（对游戏）松；**主判据是差异形态而非幅度** | 见 `spec/tolerance.md` |
-| Q8 | Live2D 语义 | 照搬 **Cubism Native Framework** 语义，用 Rust 重写 | ⚠️ 已知风险：游戏用的是 Cubism SDK for Unity，语义不同。见 `risks.md` |
+| Q8 | Live2D 语义 | ~~照搬 **Cubism Native Framework** 语义，用 Rust 重写~~ → **被 Q24 取代** | R1 已成立，见 `risks.md` |
 | Q9 | 分辨率范围 | **全范围**：含 safe area、含 aspect clamp | 前置工具：UI 层次 dumper（否则是人肉考古） |
 | Q10 | 内容范围 | **仅 Live2D 2D 对话剧情**，其余占位 | 待全量剧本统计出来后回看是否调整 |
 | — | 分支处理 | IR 保留分支树；导出默认走第一项，支持 `--branch` / `--all-branches` | 分支在时间轴编译阶段拍平，内核不感知 |
 | Q11 | 文本 | atlas 优先 + 游戏自带 TTF 生成 SDF 作 fallback | **技巧**：hook `TryAddCharacters` 预填 atlas，力争消灭 fallback |
-| Q12 | 口型同步 | **挂起**，待逆向确认游戏实现方案 | 见 `reverse/open-questions.md` #11 |
+| Q12 | 口型同步 | ~~**挂起**，待逆向确认游戏实现方案~~ → **被 Q27 解挂** | 见 `reverse/open-questions.md` #11 |
 | Q13 | 宿主语言 | **Rust** | 反编译的 C# 需翻译；用 .NET 跑原 C# 当测试 oracle 对冲风险 |
 | Q14 | 导出架构 | **两阶段**：Pass1 烘焙参数表 → Pass2 无状态并行渲染 | A（单阶段顺序）作为免费 fallback（`--fused`） |
 | Q15 | 输出形态 | 全部实现，**做成参数开关**，分层默认关闭 | draw call dump 须窄条件触发，不可布尔常开 |
 | Q16 | 版本更新 | 版本锁定，更新后**手动适配** | 建议仍把常量外置成数据文件（见下方注记） |
-| Q17 | 交付形态 | **开源代码**，资产从 Web Assets Source 抓取或本地自备 | 绝不分发资产；需资产源抽象 + 缺资产明确报错 |
+| Q17 | 交付形态 | **开源代码**，资产~~从 Web Assets Source 抓取或本地自备~~ → 来源由 **Q25** 细化 | 绝不分发资产；缺资产明确报错 |
 | Q18 | 时间尺度 | **长期项目，正确性优先于速度** | 先做逆向确认与工具链，再动渲染器 |
 
 ---
@@ -107,11 +107,44 @@ AGPL 要求分发「组合作品」时提供全部对应源码，而 Live2D Cubi
 
 注记：`PJSK` 保留为游戏本身的称呼，不再出现在任何标识符中。外部站点名（如 `pjsk.moe`）不属于本项目命名，原样保留。
 
+### Round 6 · 接入 SekaiStoryRipper 与逆向结论复审（2026-09-24）
+
+背景：静态逆向（RE-01…RE-13）推翻了 Q8 的前提，Q12 的挂起条件已满足；伴生项目
+[SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper)（MIT OR Apache-2.0）发布 v0.1.0，
+产出无损的 `sse-motion` v1 与 `ripper-episode` v1。本轮据此复审。
+
+| # | 议题 | 决策 | 关键后果 |
+|---|---|---|---|
+| Q24 | Live2D 语义（取代 Q8） | **Unity 语义**：曲线来自 `sse-motion`，按 StreamedClip / DenseClip / ConstantClip 求值；层间用 `PlayableBlender` **线性**交叉淡化（身体 0.5 / 表情 0.25 / 同类别 0.125 s）；模型变形仍走 Cubism Core 4.1 FFI | `MotionEvaluator` 只剩 Unity 一种实现；Native Framework 的 motion/fade 逻辑不移植。physics、遮罩按 `live2d.md` 复刻 |
+| Q25 | 资产来源（细化 Q17） | sse **只消费 Ripper 的输出**（`library/` + `episodes/`），自身不含任何 CDN / 解密代码 | ABCrypt 密钥永远不进入 sse；`tools/fetch` 取消；缺资产时报错并提示 `ripper rip <selector>` |
+| Q26 | 格式依赖方式 | `ripper-format` 作 **git 依赖，钉 tag**（首个：`v0.1.0`） | 升级 tag = 一次显式变更，写 CHANGELOG；`sse-assets` 对未知 `format`/`version` 一律拒绝。仓库目前私有，构建需 SSH 访问权限 |
+| Q27 | 口型同步（解挂 Q12） | **现在实现**：有语音 → RMS 经 `a·(a+1)^powK`（powK 1.75）+ 阈值 + 三段平滑；无语音 → `LipLevels[38]` 每半字推进 | 输入为 Ripper 解出的 WAV；**HCA 解码未独立验证**，登记为 open-question #38，不阻塞实现 |
+| Q28 | 「任意分辨率」的定义（复审 Q2 / Q9） | **暂缓**，等 PlayCover 在 >1080 与 <640 高度下的实测结果再定 | 候选：A 复刻游戏钳位 [640,1080]；B = A + 超采样开关（默认关）；C 不钳位。实测前 `sse-render` 的分辨率入口按「可切换策略」设计，不写死 |
+| Q29 | 动作 / 表情包解析归属 | **信任 episode 索引的 `motions` 表**；sse 只做一致性校验，不重新实现解析规则 | 规则只在 Ripper 一处实现（见其 `live2d-bundle-resolution.md`）；索引缺项 = 游戏保持上一动作，sse 照此行为 |
+| Q30 | 逆向结论的归属 | **两边各管各的，互相链接**：游戏运行时行为 → sse `docs/reverse/`；资产打包 / bundle 命名规则 → Ripper `docs/reverse/` | sse `reverse/versions/cn-6.4.0/README.md` 维护指向 Ripper 文档的链接表 |
+| Q31 | 首个里程碑 | **M1 = CPU 确定性链路**（索引 → 剧本 → IR → 时间轴 → Pass 1 参数表 → `sse inspect` / `sse params` + golden test）；**M2 = 静态首帧**（Core FFI + wgpu，单角色 PNG） | 先写 `spec/ir.md`、`spec/param-table.md`；M1 可用 RT-02 参数 dump 校验，无需 GPU |
+
+#### Q24 注记：为什么不保留 Native 语义作为可选实现
+
+资产里没有 motion3.json；第三方转出的 motion3 已知有损（AssetStudio 把零切线三次段写成 Linear，
+最大偏差约 9.5 个参数单位）。Native 语义没有忠实的输入可吃，保留它只会产生一条永远过不了 T2 的路径。
+
+#### Q25 / Q26 注记：许可证方向
+
+`ripper-format` 是 MIT OR Apache-2.0，被 AGPL-3.0-or-later 的 sse 依赖没有问题；反方向（Ripper 引用 sse 代码）不允许。
+sse 只依赖 `ripper-format`（仅 serde），**不**依赖 `ripper-cdn` / `ripper-unity` 等 crate，这是 Q25 的结构保证。
+
+#### Q29 注记：场景剧本名
+
+Ripper 实测（其 `story-asset-rules.md` §0）：拼 bundle 名必须用 masterdata 的 `scenarioId`，
+而非剧本 JSON 内的 `ScenarioId`（CN 有 54 话不一致，其中 24 话会静默播错语音）。
+sse 从索引拿路径，天然规避；**sse 内部任何地方都不得用剧本内 `ScenarioId` 反查资产。**
+
 ---
 
 ## 配套规约
 
-Q1–Q18 的执行细则已拆分为以下规约文档，**它们与本文件具有同等约束力**：
+Q1–Q31 的执行细则已拆分为以下规约文档，**它们与本文件具有同等约束力**：
 
 | 规约 | 落实的决策 |
 |---|---|

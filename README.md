@@ -22,7 +22,7 @@
 
 | | 文档 | 内容 |
 |---|---|---|
-| 1 | [`docs/decisions.md`](docs/decisions.md) | ⭐ 18 项架构决策，**单一事实来源** |
+| 1 | [`docs/decisions.md`](docs/decisions.md) | ⭐ 架构决策（Q1–Q31），**单一事实来源** |
 | 2 | [`docs/spec/glossary.md`](docs/spec/glossary.md) | 术语表，写代码前必读 |
 | 3 | [`docs/spec/coordinate-systems.md`](docs/spec/coordinate-systems.md) | 7 套坐标系 + 时间基规约，本项目最高频 bug 来源 |
 | | [`docs/architecture.md`](docs/architecture.md) | 数据流、仓库结构、crate 依赖约束、路线 |
@@ -54,10 +54,9 @@
 **本仓库不包含、也不分发任何游戏资产。**
 
 Live2D 模型、动作、字体、语音、BGM、背景图等全部版权归 SEGA / Colorful Palette 所有。
-运行本工具需要你自行提供资产，来源二选一：
-
-- 从 Web Assets Source 抓取（`tools/fetch`）
-- 本地自备目录
+运行本工具需要你自行提供资产：用伴生工具 [SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper)
+从游戏 CDN 下载并解包（需自备解密密钥），sse 只读取它的输出目录（`library/` + `episodes/`）。
+sse 本身不含任何下载或解密代码。
 
 缺少资产时工具会明确报错并列出缺失清单，不会静默降级。
 
@@ -65,7 +64,7 @@ Live2D 模型、动作、字体、语音、BGM、背景图等全部版权归 SEG
 
 本项目是资产查看与研究工具，代码开源，资产不分发。请勿使用本工具产出的内容进行商业用途或再分发。
 
-Live2D Cubism SDK 的使用与分发受 Live2D 自身条款约束，本仓库不包含其二进制，需用户自行获取并同意其条款。许可证事项见 [ADR-0002](docs/adr/0002-license.md)（**待定，未定前请勿对外发布**）。
+Live2D Cubism SDK 的使用与分发受 Live2D 自身条款约束，本仓库不包含其二进制，需用户自行获取并同意其条款。许可证事项见 [ADR-0002](docs/adr/0002-license.md)（AGPL-3.0-or-later + Cubism Core 链接例外）。
 
 
 ---
@@ -78,8 +77,10 @@ DX12 on Windows).
 
 **This repository ships no game assets.** Live2D models, motions, fonts, voice lines,
 BGM and backgrounds all remain the property of SEGA / Colorful Palette. You must
-supply them yourself, either by fetching from a web assets source (`tools/fetch`) or
-from a local directory. The tool fails loudly with a list of missing assets rather
+supply them yourself with the companion tool
+[SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper), which downloads and
+unpacks them (you provide the decryption key); sse only reads its output and contains
+no download or decryption code. The tool fails loudly with a list of missing assets rather
 than degrading silently.
 
 The Live2D Cubism SDK is **not** bundled. You must obtain it from Live2D Inc. and

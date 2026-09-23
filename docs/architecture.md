@@ -3,7 +3,7 @@
 ## 数据流
 
 ```
-[资产层]   Web Assets Source / 本地 → manifest + CAS 缓存
+[资产层]   SekaiStoryRipper 输出（library/ + episodes/，Q25）→ 只读加载 + 校验
 [解析层]   ScenarioData → IR (JSON)
 [编译层]   IR + 语音时长 + 逆向常量 → 绝对时间轴
 [Pass 1]   顺序空跑时间轴，只更新状态 → 参数表（纯数据，逐帧全量）
@@ -39,7 +39,7 @@ SekaiStoryExporter/
 ├── rust-toolchain.toml      工具链钉版本 + 双平台 target
 │
 ├── docs/
-│   ├── decisions.md              ⭐ 18 项架构决策，单一事实来源
+│   ├── decisions.md              ⭐ 架构决策（Q1–Q31），单一事实来源
 │   ├── architecture.md           本文件
 │   ├── risks.md                  已知风险登记（R1 Live2D 语义偏差…）
 │   ├── testing.md                五层测试策略
@@ -51,19 +51,18 @@ SekaiStoryExporter/
 │   │   ├── tolerance.md          容差规范 v1（T1 / T2）
 │   │   ├── coordinate-systems.md 7 套坐标系 + 时间基规约
 │   │   ├── glossary.md           术语表
-│   │   ├── ir.md                 ☐ 待设计
-│   │   └── param-table.md        ☐ 待设计
+│   │   ├── ir.md                 IR schema（M1）
+│   │   └── param-table.md        参数表格式（M1）
 │   ├── reverse/
 │   │   ├── open-questions.md     待确认事实清单（🔴🟡🟢）
 │   │   ├── work-order.md         ⭐ 逆向工作单（RE-01…13 / RT-01…05）
 │   │   ├── workflow.md           逆向工作流 + provenance 规约
-│   │   ├── versions/<region>-<ver>/constants.yaml   ☐ 逆向产出，代码生成源
+│   │   ├── versions/<region>-<ver>/   逆向结论（constants.yaml 为代码生成源）
 │   │   └── notes/                调查笔记（自由格式）
 │   └── adr/                      单条决策详述
 │
 ├── tools/                   伴生工具，非 Rust
 │   ├── dumper/              游戏内 hook：UI 层次 / 参数 / atlas / 原始帧
-│   ├── fetch/               Web Assets Source 抓取 + manifest
 │   ├── oracle/              .NET 跑反编译 C#，产出 L1 fixture
 │   └── stats/               全量剧本统计
 │
@@ -76,7 +75,7 @@ SekaiStoryExporter/
 ```
 sse-core            ← 无 sse-* 依赖（坐标系 newtype / det_math / 时间基）
 sse-ir              ← core
-sse-assets          ← core
+sse-assets          ← core, ripper-format（外部，仅 serde 类型，Q26）
 sse-scenario        ← core, ir, assets
 sse-timeline        ← core, ir, assets
 sse-live2d          ← core, assets          （唯一允许 unsafe 的 crate）
@@ -100,7 +99,7 @@ sse-cli             ← 全部
 | 阶段 | 内容 | 完成判据 |
 |---|---|---|
 | **P0** | 逆向确认 + 工具链 | 🔴 六项全部关闭；UI dumper / 参数 dumper / atlas dumper / oracle 可跑 |
-| **P1** | 数据层 | 资产抓取可用；ScenarioData → IR；**全量剧本统计报告产出** |
+| **P1** | 数据层 | 读取 Ripper 输出可用；ScenarioData → IR；**全量剧本统计报告产出** |
 | **P2** | 时间轴 + 参数表 | Pass 1 可产出参数表，并与 hook 游戏 dump 的参数逐数值比对通过 |
 | **P3** | 最小渲染 + 导出打通 | UI 还很丑，但能出音画同步的 mp4 + 帧哈希 |
 | **P4** | fidelity harness | 形态分类器可用；T1/T2 报告自动产出 |
@@ -112,17 +111,17 @@ sse-cli             ← 全部
 
 ---
 
-## 接下来的前三件事
+## 接下来（Q31）
 
-1. **确认色彩空间**（`reverse/open-questions.md` #1）——最便宜、错了代价最大，查一下 PlayerSettings 就有。
-2. **写 UI 层次 dumper**——Q9=D 的前置。在 N 个分辨率 × M 个宽高比下遍历所有 Canvas 下的 RectTransform，输出
-   `path / anchorMin / anchorMax / offsetMin / offsetMax / pivot / sizeDelta / localScale / rotation / active / 组件列表 / 最终屏幕 rect`。
-   这一份产出同时是：布局参数的唯一可信来源、布局求值器的单测 fixture、游戏更新后的回归网。
-3. **全量剧本统计**——让 Q10=A 的取舍有数据：
-   - 每种 `SnippetAction` 出现次数
-   - 每种 `SpecialEffectType` 出现次数 + 覆盖多少剧本
-   - 含 `Selectable` 的剧本占比
-   - 引用 3D / 未支持指令的剧本占比
-   - 去重后的 Live2D 模型 / 动作 / 表情全集（决定资产下载量）
+早期的「前三件事」（色彩空间、UI dumper、全量剧本统计）中，色彩空间与剧本统计已完成，UI dumper 归入 RT-01。
 
-   预期结论形态：少数几种特效占绝大多数出现次数——那就能以极低成本把覆盖率从 A 拉到接近 C。
+**M1 · CPU 确定性链路**（无 GPU）
+
+1. `spec/ir.md`、`spec/param-table.md` 定稿
+2. `sse-assets`：读取 `ripper-episode` / `sse-motion`，拒绝未知版本，缺资产列清单并提示 `ripper rip <selector>`
+3. `sse-scenario`：`ScenarioSceneData` → IR
+4. `sse-timeline`：IR + 语音时长 + 常量 → 绝对时间轴
+5. `sse-bake`：Pass 1，Unity 语义的动作求值与线性混合（Q24）、眨眼、口型（Q27）→ 参数表
+6. `sse inspect` / `sse params` + golden test；RT-02 就绪后做参数级比对
+
+**M2 · 静态首帧**：Cubism Core FFI + wgpu 单角色渲染进 2304×1536 RT，输出 PNG。
