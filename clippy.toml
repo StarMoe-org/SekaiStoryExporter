@@ -9,8 +9,8 @@ disallowed-types = [
 ]
 
 disallowed-methods = [
-  { path = "std::fs::read_dir",   reason = "返回顺序由文件系统决定。必须收集后排序，请用 pjsk_core::fs::read_dir_sorted" },
-  { path = "f32::sin",  reason = "std 调用系统 libm，macOS 与 Windows 实现不同。用 pjsk_core::det_math" },
+  { path = "std::fs::read_dir",   reason = "返回顺序由文件系统决定。必须收集后排序，请用 sse_core::fs::read_dir_sorted" },
+  { path = "f32::sin",  reason = "std 调用系统 libm，macOS 与 Windows 实现不同。用 sse_core::det_math" },
   { path = "f32::cos",  reason = "同上" },
   { path = "f32::tan",  reason = "同上" },
   { path = "f32::exp",  reason = "同上" },

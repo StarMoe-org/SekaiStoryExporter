@@ -8,6 +8,11 @@ together with its fidelity impact.
 
 ## [Unreleased]
 
+### 变更 / Changed
+- 项目改名为 **SekaiStoryExporter**（缩写 `sse`）：13 个 crate 由 `pjsk-*` 改为 `sse-*`，
+  Rust 路径 `pjsk_core` → `sse_core`，CLI 子命令写作 `sse <cmd>`。无像素影响（决策 Q23）
+- Renamed the project to **SekaiStoryExporter** (`sse`): crates `pjsk-*` → `sse-*`. No pixel impact.
+
 ### 新增 / Added
 - 项目骨架：Cargo workspace（13 crate + xtask），仅含职责文档注释，无实现
 - 确定性规约落地为 `clippy.toml` 的编译期 deny，**已实测 5 条规则全部触发**

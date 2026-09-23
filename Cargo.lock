@@ -3,118 +3,118 @@
 version = 4
 
 [[package]]
-name = "pjsk-assets"
+name = "sse-assets"
 version = "0.0.0"
 dependencies = [
- "pjsk-core",
+ "sse-core",
 ]
 
 [[package]]
-name = "pjsk-bake"
+name = "sse-bake"
 version = "0.0.0"
 dependencies = [
- "pjsk-assets",
- "pjsk-core",
- "pjsk-ir",
- "pjsk-live2d",
- "pjsk-text",
- "pjsk-timeline",
- "pjsk-ugui",
+ "sse-assets",
+ "sse-core",
+ "sse-ir",
+ "sse-live2d",
+ "sse-text",
+ "sse-timeline",
+ "sse-ugui",
 ]
 
 [[package]]
-name = "pjsk-cli"
+name = "sse-cli"
 version = "0.0.0"
 dependencies = [
- "pjsk-assets",
- "pjsk-bake",
- "pjsk-core",
- "pjsk-export",
- "pjsk-fidelity",
- "pjsk-ir",
- "pjsk-render",
- "pjsk-scenario",
- "pjsk-timeline",
+ "sse-assets",
+ "sse-bake",
+ "sse-core",
+ "sse-export",
+ "sse-fidelity",
+ "sse-ir",
+ "sse-render",
+ "sse-scenario",
+ "sse-timeline",
 ]
 
 [[package]]
-name = "pjsk-core"
+name = "sse-core"
 version = "0.0.0"
 
 [[package]]
-name = "pjsk-export"
+name = "sse-export"
 version = "0.0.0"
 dependencies = [
- "pjsk-core",
- "pjsk-render",
+ "sse-core",
+ "sse-render",
 ]
 
 [[package]]
-name = "pjsk-fidelity"
+name = "sse-fidelity"
 version = "0.0.0"
 dependencies = [
- "pjsk-core",
+ "sse-core",
 ]
 
 [[package]]
-name = "pjsk-ir"
+name = "sse-ir"
 version = "0.0.0"
 dependencies = [
- "pjsk-core",
+ "sse-core",
 ]
 
 [[package]]
-name = "pjsk-live2d"
+name = "sse-live2d"
 version = "0.0.0"
 dependencies = [
- "pjsk-assets",
- "pjsk-core",
+ "sse-assets",
+ "sse-core",
 ]
 
 [[package]]
-name = "pjsk-render"
+name = "sse-render"
 version = "0.0.0"
 dependencies = [
- "pjsk-assets",
- "pjsk-core",
- "pjsk-live2d",
- "pjsk-text",
- "pjsk-ugui",
+ "sse-assets",
+ "sse-core",
+ "sse-live2d",
+ "sse-text",
+ "sse-ugui",
 ]
 
 [[package]]
-name = "pjsk-scenario"
+name = "sse-scenario"
 version = "0.0.0"
 dependencies = [
- "pjsk-assets",
- "pjsk-core",
- "pjsk-ir",
+ "sse-assets",
+ "sse-core",
+ "sse-ir",
 ]
 
 [[package]]
-name = "pjsk-text"
+name = "sse-text"
 version = "0.0.0"
 dependencies = [
- "pjsk-assets",
- "pjsk-core",
- "pjsk-ugui",
+ "sse-assets",
+ "sse-core",
+ "sse-ugui",
 ]
 
 [[package]]
-name = "pjsk-timeline"
+name = "sse-timeline"
 version = "0.0.0"
 dependencies = [
- "pjsk-assets",
- "pjsk-core",
- "pjsk-ir",
+ "sse-assets",
+ "sse-core",
+ "sse-ir",
 ]
 
 [[package]]
-name = "pjsk-ugui"
+name = "sse-ugui"
 version = "0.0.0"
 dependencies = [
- "pjsk-assets",
- "pjsk-core",
+ "sse-assets",
+ "sse-core",
 ]
 
 [[package]]

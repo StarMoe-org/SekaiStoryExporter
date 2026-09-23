@@ -10,7 +10,7 @@ license      = "AGPL-3.0-or-later"   # 见 docs/adr/0002-license.md
 repository   = "https://github.com/StarMoe-org/SekaiStoryExporter"
 
 [workspace.lints.rust]
-unsafe_code = "warn"           # 仅 pjsk-live2d 的 FFI 层允许，需 #[allow] + 安全性注释
+unsafe_code = "warn"           # 仅 sse-live2d 的 FFI 层允许，需 #[allow] + 安全性注释
 
 [workspace.lints.clippy]
 disallowed_types  = "deny"     # 见 clippy.toml —— 确定性规约的编译期防线

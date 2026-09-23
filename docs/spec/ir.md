@@ -2,8 +2,8 @@
 
 > **状态：待设计。**
 >
-> IR 是解析层与编译层之间的接缝（决策 Q4 / Q14），影响 `pjsk-ir` / `pjsk-scenario` /
-> `pjsk-timeline` 三个 crate 的全部接口。**应先于任何实现代码定死。**
+> IR 是解析层与编译层之间的接缝（决策 Q4 / Q14），影响 `sse-ir` / `sse-scenario` /
+> `sse-timeline` 三个 crate 的全部接口。**应先于任何实现代码定死。**
 >
 > 需要在此规定：
 > - 事件模型与版本号字段

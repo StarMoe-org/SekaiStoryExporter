@@ -1,0 +1,16 @@
+[package]
+name = "sse-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sse-core = { path = "../sse-core" }
+sse-assets = { path = "../sse-assets" }
+sse-live2d = { path = "../sse-live2d" }
+sse-ugui = { path = "../sse-ugui" }
+sse-text = { path = "../sse-text" }
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
-# pjskChatGenerator
+# SekaiStoryExporter
 
-还原 Project Sekai 的 Live2D 剧情演出（AVG），并导出为视频。
+**SekaiStoryExporter**（缩写 `sse`）：还原 Project Sekai 的 Live2D 剧情演出（AVG），并导出为视频。
 
 | | |
 |---|---|
@@ -72,7 +72,7 @@ Live2D Cubism SDK 的使用与分发受 Live2D 自身条款约束，本仓库不
 
 ## English summary
 
-A tool that reproduces Project Sekai's Live2D story scenes (visual-novel style) and
+**SekaiStoryExporter** (`sse`) is a tool that reproduces Project Sekai's Live2D story scenes (visual-novel style) and
 exports them to video. Written in Rust, rendering through wgpu (Metal on macOS,
 DX12 on Windows).
 

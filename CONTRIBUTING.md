@@ -40,8 +40,8 @@ Environment:
   (PRs and issues may be written in either Chinese or English):
 
   ```
-  feat(pjsk-ugui): implement CanvasScaler MatchWidthOrHeight mode
-  fix(pjsk-render): correct Y-flip in UI bilinear sampling
+  feat(sse-ugui): implement CanvasScaler MatchWidthOrHeight mode
+  fix(sse-render): correct Y-flip in UI bilinear sampling
   re(constants): add full SpecialEffectType enum (cn-5.2.0)
   ```
 
@@ -63,8 +63,8 @@ General:
 - [ ] New terms added to `docs/spec/glossary.md`
 - [ ] Coordinate values use space-tagged types; no hand-written Y-flips
 
-If you touch the render path (`pjsk-render`, `pjsk-bake`, `pjsk-live2d`, `pjsk-ugui`,
-`pjsk-text`, `pjsk-core`):
+If you touch the render path (`sse-render`, `sse-bake`, `sse-live2d`, `sse-ugui`,
+`sse-text`, `sse-core`):
 
 - [ ] Attach a **local T1 frame-hash report**
 - [ ] Comply with the R-level rules in `docs/conventions/determinism.md`
@@ -88,8 +88,8 @@ Ordered by actual risk in this project:
 
 1. **Determinism** -- any new source of non-determinism (see determinism R-level rules)
 2. **Coordinate spaces** -- computing in the wrong space
-3. **Dependency direction** -- does `pjsk-render` accidentally depend on `pjsk-timeline` /
-   `pjsk-scenario`? That breaks Pass 2 statelessness
+3. **Dependency direction** -- does `sse-render` accidentally depend on `sse-timeline` /
+   `sse-scenario`? That breaks Pass 2 statelessness
 4. **Provenance** of reverse-engineered numbers
 5. Ordinary correctness and readability
 
@@ -143,7 +143,7 @@ Commit 遵循 Conventional Commits，**scope 用 crate 名，正文用英文**�
 
 ### 评审重点
 
-按本项目实际风险排序：确定性 → 坐标系 → 依赖方向（`pjsk-render` 不得依赖 `pjsk-timeline`/`pjsk-scenario`）→ 逆向数据的 provenance → 常规正确性。
+按本项目实际风险排序：确定性 → 坐标系 → 依赖方向（`sse-render` 不得依赖 `sse-timeline`/`sse-scenario`）→ 逆向数据的 provenance → 常规正确性。
 
 ### 不接受的改动
 

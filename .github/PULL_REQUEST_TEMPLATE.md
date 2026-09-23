@@ -22,7 +22,7 @@
 
 ### 若触碰渲染路径 / If you touched the render path
 
-`pjsk-render` · `pjsk-bake` · `pjsk-live2d` · `pjsk-ugui` · `pjsk-text` · `pjsk-core`
+`sse-render` · `sse-bake` · `sse-live2d` · `sse-ugui` · `sse-text` · `sse-core`
 
 - [ ] 附本地 **T1 帧哈希报告** / attach a local **T1 frame-hash report**
 - [ ] 符合确定性 R 级规则 / complies with the R-level rules in
