@@ -404,6 +404,16 @@ impl Gpu {
         self.text
     }
 
+    /// Overwrites a full-target-size image (movie frames).
+    pub fn upload_image(&mut self, id: ImageId, rgba: &[u8]) {
+        self.queue.write_texture(
+            self.images[id.0]._tex.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.width * 4), rows_per_image: None },
+            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+        );
+    }
+
     pub fn upload_text(&mut self, rgba: &[u8]) {
         self.queue.write_texture(
             self.images[self.text.0]._tex.as_image_copy(),

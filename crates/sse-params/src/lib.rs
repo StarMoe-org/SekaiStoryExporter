@@ -44,8 +44,8 @@ pub struct FrameState {
     pub cinemascope: f32,
     /// Scenario menu button (`UIPartsMenuButton`) opacity.
     pub menu_alpha: f32,
-    /// A movie the renderer cannot show yet (placeholder).
-    pub movie: Option<String>,
+    /// `PlayMovie`: the movie layer covers the scenario.
+    pub movie: Option<MovieState>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -90,6 +90,15 @@ pub struct TalkState {
     /// Seconds since the auto signal was enabled (first talk of the episode); drives the
     /// `TweenAlpha` blink of its icon.
     pub auto_time: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MovieState {
+    pub name: String,
+    /// Library path of the video elementary stream (`.m2v`), when the ripper produced one.
+    pub file: Option<String>,
+    /// Seconds since playback started.
+    pub time: f32,
 }
 
 /// `TextAppearFade`: character `i` (index in TMP's character list, line feeds included) has

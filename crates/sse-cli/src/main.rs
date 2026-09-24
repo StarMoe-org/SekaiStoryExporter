@@ -142,6 +142,7 @@ fn main() -> Result<()> {
         Command::Export { selector, output, from, to, crf, ffmpeg, out } => {
             let table = bake(&lib, selector, &opts, out.config())?;
             let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets())?;
+            r.set_ffmpeg(ffmpeg.clone());
             let n = table.frames.len() as u32;
             let range = from.unwrap_or(0).min(n)..to.unwrap_or(n).min(n);
             let vopts = sse_export::VideoOptions {

@@ -166,7 +166,8 @@ struct Baker<'a> {
     full_text: Vec<FstRun>,
     /// `PlayCinemascope(show)` calls: (start frame, show).
     cinemascope: Vec<(u32, bool)>,
-    movie: Option<(String, u32)>,
+    /// (name, video file, start frame, end frame)
+    movie: Option<(String, Option<String>, u32, u32)>,
     audio: Vec<AudioCue>,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
@@ -681,7 +682,8 @@ impl<'a> Baker<'a> {
             InstrKind::Unsupported(u) => {
                 if let UnsupportedReason::Movie { name, files } = &u.reason {
                     self.hide_talk_window(f);
-                    self.movie = Some((name.clone(), timing.finish));
+                    let video = files.iter().find(|x| x.0.ends_with(".m2v")).map(|x| x.0.clone());
+                    self.movie = Some((name.clone(), video, f, timing.finish));
                     if let Some(w) = files.iter().find(|x| x.0.ends_with(".wav")) {
                         let a = AudioRef { cue: name.clone(), files: vec![w.clone()] };
                         self.one_shot(&a, f, 1.0, AudioKind::Movie);
@@ -690,7 +692,7 @@ impl<'a> Baker<'a> {
                     for c in self.chars.values_mut() {
                         c.visible = false;
                     }
-                    note(&mut self.notes, "movies are not decoded yet: a placeholder is shown (audio plays)");
+                    note(&mut self.notes, "movies: video decoded with ffmpeg, cover-fit to the screen (movie layer framing not reversed)");
                 } else {
                     note(&mut self.notes, &format!("unsupported snippet: {:?}", u.reason));
                 }
@@ -892,7 +894,11 @@ impl<'a> Baker<'a> {
             }
         });
         let movie = match &self.movie {
-            Some((name, end)) if f < *end => Some(name.clone()),
+            Some((name, file, start, end)) if f < *end => Some(MovieState {
+                name: name.clone(),
+                file: file.clone(),
+                time: (f - start) as f32 * self.tb.delta(),
+            }),
             _ => None,
         };
         FrameState {

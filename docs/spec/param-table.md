@@ -2,7 +2,7 @@
 
 > **状态：v2（2026-09-24，对标原生录制后）。** v1 → v2：`full_screen_text` 改为 `FullScreenTextState`
 > （`progress` 逐槽进度 + `alpha` 淡出），新增 `cinemascope`（FST 黑边/底板的缓动比例）、`menu_alpha`、
-> `TalkState.auto_time`（AUTO 三角闪烁相位）。 类型定义在 `crates/sse-params`，本文件说明语义。
+> `TalkState.auto_time`（AUTO 三角闪烁相位）；`movie` 改为 `MovieState`（视频文件 + 已播放秒数）。 类型定义在 `crates/sse-params`，本文件说明语义。
 > 参数表是 Pass 1（`sse-bake`）与 Pass 2（`sse-render` / `sse-export`）的接缝（Q14）。
 
 ## 结构

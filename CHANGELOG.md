@@ -15,7 +15,8 @@ together with its fidelity impact.
 - 全屏文字：黑边与 50% 底板、逐字渐显、56 号左对齐、Underlay 阴影
 - 相机模糊按 `RenderBlur` 实现（1/2 降采样、3 轮、全分辨率纹素偏移），与录像 σ≈8 一致
 - 字号按 em 换算（此前 `ab_glyph` 行高口径导致字小约 30%）；正文自动字号从 44 起算
-- 参数表 v2：`FullScreenTextState`、`cinemascope`、`menu_alpha`、`TalkState.auto_time`
+- 片尾影片按 ffmpeg 解码 `.m2v`，铺满高度居中裁切（此前是占位文字）
+- 参数表 v2：`FullScreenTextState`、`cinemascope`、`menu_alpha`、`TalkState.auto_time`、`MovieState`
 - **像素影响**：全片 UI、文字大小、角色位置、模糊强度均改变
 - Visuals calibrated against the native capture (character placement, prefab-accurate talk window, FST, blur, font size).
 

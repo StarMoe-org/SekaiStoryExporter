@@ -21,6 +21,7 @@
 //! - Hardware bilinear sampling (determinism R-8 asks for manual bilinear)
 
 mod gpu;
+mod movie;
 mod native_ui;
 
 use std::collections::BTreeMap;
@@ -90,10 +91,14 @@ pub struct Renderer {
     ui: UiAssets,
     ui_images: [Option<gpu::Image>; 3],
     native: native_ui::NativeUi,
+    movie: movie::MovieDecoder,
+    movie_image: gpu::Image,
+    movie_key: Option<(String, u32)>,
     body_font: sse_text::Font,
     name_font: sse_text::Font,
     text_key: Option<String>,
     lib: Library,
+    fps: u32,
 }
 
 impl Renderer {
@@ -120,6 +125,7 @@ impl Renderer {
             load_ui(&mut gpu, &ui.place_info)?,
         ];
         let native = native_ui::NativeUi::load(&mut gpu, &ui.sprites);
+        let movie_image = gpu.image(&image::RgbaImage::new(cfg.width, cfg.height));
         let font = |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
         Ok(Self {
             body_font: font(&ui.font_body)?,
@@ -131,8 +137,12 @@ impl Renderer {
             ui,
             ui_images,
             native,
+            movie: movie::MovieDecoder::new("ffmpeg".into(), cfg.width, cfg.height, table.fps),
+            movie_image,
+            movie_key: None,
             text_key: None,
             lib: lib.clone(),
+            fps: table.fps,
         })
     }
 
@@ -206,8 +216,19 @@ impl Renderer {
         plan.camera_color = frame.camera_color;
 
         // 4. UI
-        if frame.movie.is_some() {
+        if let Some(m) = &frame.movie {
             plan.ui_top.push(gpu::QuadDraw::solid([0.0, 0.0, w, h], [0.0, 0.0, 0.0, 1.0]));
+            if let Some(file) = &m.file {
+                let index = (m.time * self.movie_fps() as f32).round() as u32;
+                let key = (file.clone(), index);
+                if self.movie_key.as_ref() != Some(&key) {
+                    let path = self.lib.path(file);
+                    let rgba = self.movie.frame(&path, index).map_err(RenderError::Other)?.to_vec();
+                    self.gpu.upload_image(self.movie_image.id, &rgba);
+                    self.movie_key = Some(key);
+                }
+                plan.ui_top.push(gpu::QuadDraw::image(self.movie_image.id, [0.0, 0.0, w, h], [1.0; 4]));
+            }
         }
         if let Some(t) = &frame.talk {
             if self.native.has_window() {
@@ -241,7 +262,7 @@ impl Renderer {
             frame.telop.as_ref().map(|b| (&b.text, (b.alpha * 255.0) as u8)),
             frame.place_info.as_ref().map(|b| &b.text),
             frame.full_screen_text.as_ref().map(|b| (&b.text, (b.progress * 64.0) as u32, (b.alpha * 255.0) as u8)),
-            frame.movie.as_deref().unwrap_or("")
+            frame.movie.as_ref().map_or("", |m| if m.file.is_some() { "" } else { m.name.as_str() })
         );
         if self.text_key.as_deref() == Some(key.as_str()) {
             return Ok(self.gpu.text_image());
@@ -323,8 +344,8 @@ impl Renderer {
                 &|i| (progress - i as f32).clamp(0.0, 1.0),
             );
         }
-        if let Some(m) = &frame.movie {
-            let msg = format!("[movie: {m}]");
+        if let Some(m) = frame.movie.as_ref().filter(|m| m.file.is_none()) {
+            let msg = format!("[movie: {}]", m.name);
             sse_text::draw(&mut canvas, &self.body_font, &msg, u32::MAX, frame_at(0.0, 500.0, 1920.0, 80.0, 0.5, 0.5), &banner, 0.6);
         }
         self.gpu.upload_text(&canvas.to_rgba8());
@@ -339,6 +360,16 @@ impl Renderer {
             "talk window, name bar, auto signal and menu button rebuilt from the prefabs (sprites user-supplied); telop / place-info from third-party overlays".into(),
             "character vertical placement measured, not reversed (stand y − 0.5 in the RT, open question #43)".into(),
         ]
+    }
+
+    /// Movie frames are decoded at the table's frame rate.
+    fn movie_fps(&self) -> u32 {
+        self.fps
+    }
+
+    /// Uses this `ffmpeg` for movie frames.
+    pub fn set_ffmpeg(&mut self, ffmpeg: PathBuf) {
+        self.movie = movie::MovieDecoder::new(ffmpeg, self.cfg.width, self.cfg.height, self.fps);
     }
 
     /// Notes that depend on the supplied assets.
