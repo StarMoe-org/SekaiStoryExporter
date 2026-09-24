@@ -438,7 +438,19 @@ impl Parser<'_> {
                 facial: opt(&l.facial_name),
                 depth,
             },
-            3 => LayoutOp::Hide,
+            3 => LayoutOp::Hide {
+                // `ScenarioPlayer` +0x200 (speed scale) is 1 in normal playback.
+                delay: if l.side_from == l.side_to {
+                    consts::HIDE_DELAY_IN_PLACE
+                } else {
+                    let duration = match l.move_speed_type {
+                        1 => consts::MOVE_DURATION_FAST,
+                        2 => consts::MOVE_DURATION_SLOW,
+                        _ => consts::MOVE_DURATION_NORMAL,
+                    };
+                    duration + consts::HIDE_SLIDE_FADE_OFFSET
+                },
+            },
             4 | 5 => LayoutOp::Shake {
                 axis: if l.kind == 4 { Axis::X } else { Axis::Y },
                 raw: serde_json::to_value(l).unwrap_or_default(),

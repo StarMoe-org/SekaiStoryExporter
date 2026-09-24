@@ -48,6 +48,18 @@ impl QuadDraw {
     }
 }
 
+/// One `fx_transition_scenario` billboard in target pixels.
+pub struct ParticleDraw {
+    /// `Sekai/Particles/Additive` (true) or `AlphaBlended`.
+    pub additive: bool,
+    pub image: ImageId,
+    /// Corners in order (0, 1, 2, 3) around the quad, with their UVs.
+    pub corners: [[f32; 2]; 4],
+    pub uvs: [[f32; 2]; 4],
+    /// Vertex colour, straight alpha (`startColor × colourOverLifetime`).
+    pub color: [f32; 4],
+}
+
 pub struct CharacterDraw {
     pub model: usize,
     pub params: Vec<f32>,
@@ -64,9 +76,15 @@ pub struct FramePlan {
     pub characters: Vec<CharacterDraw>,
     pub blur: f32,
     pub camera_color: Option<sse_params::CameraColor>,
-    /// Drawn after post effects (fader).
-    pub overlay: Vec<QuadDraw>,
+    /// `EffectLayer` particles: canvas sorting order 245, between `ForegroundLayer` (240)
+    /// and the `UILayer` (280) that holds the talk window and `FrontCover` fader.
+    pub particles: Vec<ParticleDraw>,
+    /// Scenario UI (talk window, menu button): after post effects, under the fader.
     pub ui: Vec<QuadDraw>,
+    /// `FrontCover` `ColorFader`: above the scenario UI.
+    pub overlay: Vec<QuadDraw>,
+    /// Dialog layer (full-screen text): above the fader.
+    pub ui_top: Vec<QuadDraw>,
     pub text: Option<ImageId>,
 }
 
@@ -130,12 +148,16 @@ pub struct Gpu {
     mask_pipe: wgpu::RenderPipeline,
     quad_pipe: wgpu::RenderPipeline,
     blur_pipe: wgpu::RenderPipeline,
+    point_pipe: wgpu::RenderPipeline,
     mono_pipe: wgpu::RenderPipeline,
+    /// Particle billboards: [additive, alpha-blended].
+    particle_pipes: [wgpu::RenderPipeline; 2],
     rt: Tex,
     masks: Vec<Tex>,
     dummy_mask: Tex,
     scene: Tex,
-    tmp: Tex,
+    /// `RenderBlur` temporaries at `1 / DownSample` resolution.
+    half: [Tex; 2],
     output: wgpu::Texture,
     output_view: wgpu::TextureView,
     readback: wgpu::Buffer,
@@ -313,7 +335,23 @@ impl Gpu {
         let mask_pipe = pipe(&cubism_pl, "cubism_vs", "mask_fs", &vbufs, MASK_FMT, Some(blend(F::One, F::One, F::One, F::One)), false);
         let quad_pipe = pipe(&quad_pl, "quad_vs", "quad_fs", &[], FMT, Some(normal), true);
         let blur_pipe = pipe(&quad_pl, "post_vs", "blur_fs", &[], FMT, None, true);
+        let point_pipe = pipe(&quad_pl, "post_vs", "point_fs", &[], FMT, None, true);
         let mono_pipe = pipe(&quad_pl, "post_vs", "mono_fs", &[], FMT, None, true);
+        // `Sekai/Particles/Additive`: Blend SrcAlpha One; `AlphaBlended`: SrcAlpha
+        // OneMinusSrcAlpha (both `ZWrite Off`, `Cull Off`; destination alpha kept).
+        let pvb = [Some(wgpu::VertexBufferLayout {
+            array_stride: 8 * 4,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
+            ],
+        })];
+        let particle_pipes = [
+            pipe(&quad_pl, "particle_vs", "particle_fs", &pvb, FMT, Some(blend(F::SrcAlpha, F::One, F::Zero, F::One)), false),
+            pipe(&quad_pl, "particle_vs", "particle_fs", &pvb, FMT, Some(blend(F::SrcAlpha, F::OneMinusSrcAlpha, F::Zero, F::One)), false),
+        ];
 
         let [rtw, rth] = consts::LIVE2D_RT_SIZE;
         let ra = wgpu::TextureUsages::RENDER_ATTACHMENT;
@@ -326,7 +364,8 @@ impl Gpu {
             wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
         );
         let scene = tex(&device, width, height, FMT, ra);
-        let tmp = tex(&device, width, height, FMT, ra);
+        let (hw, hh) = (width / consts::BLUR_DOWN_SAMPLE, height / consts::BLUR_DOWN_SAMPLE);
+        let half = [tex(&device, hw, hh, FMT, ra), tex(&device, hw, hh, FMT, ra)];
         let output = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("output"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -358,11 +397,13 @@ impl Gpu {
             quad_pipe,
             blur_pipe,
             mono_pipe,
+            particle_pipes,
             rt,
             masks: Vec::new(),
             dummy_mask,
             scene,
-            tmp,
+            half,
+            point_pipe,
             output,
             output_view,
             readback,
@@ -394,6 +435,16 @@ impl Gpu {
 
     pub fn text_image(&self) -> ImageId {
         self.text
+    }
+
+    /// Overwrites a full-target-size image (movie frames).
+    pub fn upload_image(&mut self, id: ImageId, rgba: &[u8]) {
+        self.queue.write_texture(
+            self.images[id.0]._tex.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.width * 4), rows_per_image: None },
+            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+        );
     }
 
     pub fn upload_text(&mut self, rgba: &[u8]) {
@@ -541,6 +592,39 @@ impl Gpu {
             .collect()
     }
 
+    /// Draws billboards in order, switching blend per draw (Unity renders them in sorting
+    /// order; one draw per billboard keeps the additive / alpha interleaving exact).
+    fn particles(&mut self, enc: &mut wgpu::CommandEncoder, draws: &[ParticleDraw]) {
+        use wgpu::util::DeviceExt;
+        if draws.is_empty() {
+            return;
+        }
+        let (w, h) = (self.width as f32, self.height as f32);
+        let mut verts: Vec<f32> = Vec::with_capacity(draws.len() * 6 * 8);
+        for d in draws {
+            for &k in &[0usize, 1, 2, 0, 2, 3] {
+                verts.extend_from_slice(&[d.corners[k][0], d.corners[k][1], d.uvs[k][0], d.uvs[k][1]]);
+                verts.extend_from_slice(&d.color);
+            }
+        }
+        let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("particles"),
+            contents: bytemuck::cast_slice(&verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let q = QuadGpu { rect: [0.0; 4], uv: [0.0; 4], color: [1.0; 4], target: [w, h, 0.0, 0.0] };
+        let bgs: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.quad_bind(d.image, q)).collect();
+        let out_view = self.output_view.clone();
+        let mut rp = Self::pass(enc, &out_view, None);
+        rp.set_vertex_buffer(0, vbuf.slice(..));
+        for (i, d) in draws.iter().enumerate() {
+            rp.set_pipeline(&self.particle_pipes[if d.additive { 0 } else { 1 }]);
+            rp.set_bind_group(0, &bgs[i], &[]);
+            let v0 = (i * 6) as u32;
+            rp.draw(v0..v0 + 6, 0..1);
+        }
+    }
+
     fn pass<'e>(
         enc: &'e mut wgpu::CommandEncoder,
         view: &'e wgpu::TextureView,
@@ -579,8 +663,10 @@ impl Gpu {
         }
         self.queue.write_buffer(&m.positions, 0, bytemuck::cast_slice(&positions));
         let [rtw, rth] = consts::LIVE2D_RT_SIZE;
-        // RenderStudio: ortho size 1.5, model at (0, 0.383), standScale 2.8
-        let half_h = 1.5_f32;
+        // RenderStudio (landscape): ortho size 1.5, camera at the studio origin, model at
+        // stageRoot (0, fixedStagePosition.y × orthoSize) + standPosition (0, 0.383),
+        // standScale 2.8 (`live2d.md` §5).
+        let half_h = consts::LIVE2D_ORTHO_SIZE;
         let half_w = half_h * rtw as f32 / rth as f32;
         let draws: Vec<DrawGpu> = m
             .core
@@ -588,7 +674,7 @@ impl Gpu {
             .iter()
             .enumerate()
             .map(|(i, d)| DrawGpu {
-                xform: [2.8, 0.0, 0.383, 0.0],
+                xform: [2.8, 0.0, consts::LIVE2D_FIXED_STAGE_Y * consts::LIVE2D_ORTHO_SIZE + consts::LIVE2D_STAND_Y, 0.0],
                 half_extent: [half_w, half_h, rtw as f32, rth as f32],
                 tint: [1.0; 4],
                 params: [
@@ -711,19 +797,33 @@ impl Gpu {
         }
 
         let mut enc = self.device.create_command_encoder(&Default::default());
-        // blur (two separable passes, strength scales the tap distance)
+        // `ScenarioPostProcessRenderPass.RenderBlur` (0x4A15AC4): point-sampled blit to
+        // 1/DownSample, then Iterations × (V pass, U pass) with `_BlurSize = spread·i + 1`,
+        // then a point-sampled blit back. `Hidden/Sekai/Scenario/Post` offsets its taps by
+        // `_BlitTexture_TexelSize × _BlurSize`; `Blitter.BlitTexture` (0x49D9FF8) binds the
+        // temporary via `MaterialPropertyBlock.SetTexture(int, Texture)`, so the texel size is
+        // the half-resolution one. The blur's on-screen size therefore depends on the render
+        // resolution (Q28: native = output resolution).
         if plan.blur > 0.001 {
-            let s = plan.blur * 3.0;
+            let spread = plan.blur * consts::BLUR_MAX_SPREAD;
+            let (hw, hh) = ((self.width / consts::BLUR_DOWN_SAMPLE) as f32, (self.height / consts::BLUR_DOWN_SAMPLE) as f32);
             let scene_view = self.scene.view.clone();
-            let tmp_view = self.tmp.view.clone();
-            for (src, dst, step) in [(&scene_view, &tmp_view, [s / w, 0.0]), (&tmp_view, &scene_view, [0.0, s / h])] {
+            let (a, b) = (self.half[0].view.clone(), self.half[1].view.clone());
+            let blit = |this: &mut Self, enc: &mut wgpu::CommandEncoder, src: &wgpu::TextureView, dst: &wgpu::TextureView, pipe: bool, step: [f32; 2]| {
                 let p = PostGpu { step: [step[0], step[1], 0.0, 0.0], mono: [0.0; 4], tone: [0.0; 4], influence: [0.0; 4] };
-                let bg = self.view_bind(src, bytemuck::bytes_of(&p));
-                let mut rp = Self::pass(&mut enc, dst, None);
-                rp.set_pipeline(&self.blur_pipe);
+                let bg = this.view_bind(src, bytemuck::bytes_of(&p));
+                let mut rp = Self::pass(enc, dst, None);
+                rp.set_pipeline(if pipe { &this.blur_pipe } else { &this.point_pipe });
                 rp.set_bind_group(0, &bg, &[]);
                 rp.draw(0..4, 0..1);
+            };
+            blit(self, &mut enc, &scene_view, &a, false, [0.0; 2]);
+            for i in 0..consts::BLUR_ITERATIONS {
+                let size = spread * i as f32 + 1.0;
+                blit(self, &mut enc, &a, &b, true, [0.0, size / hh]);
+                blit(self, &mut enc, &b, &a, true, [size / hw, 0.0]);
             }
+            blit(self, &mut enc, &a, &scene_view, false, [0.0; 2]);
         }
         // monotone → output
         let cc = plan.camera_color;
@@ -741,9 +841,12 @@ impl Gpu {
             rp.set_bind_group(0, &bg, &[]);
             rp.draw(0..4, 0..1);
         }
+        // EffectLayer particles, then the UILayer (talk window, fader) on top
+        self.particles(&mut enc, &plan.particles);
         // overlay + UI + text
-        let mut ui: Vec<wgpu::BindGroup> = self.quads(&plan.overlay);
-        ui.extend(self.quads(&plan.ui));
+        let mut ui: Vec<wgpu::BindGroup> = self.quads(&plan.ui);
+        ui.extend(self.quads(&plan.overlay));
+        ui.extend(self.quads(&plan.ui_top));
         if let Some(t) = plan.text {
             ui.extend(self.quads(&[QuadDraw { image: Some(t), rect: [0.0, 0.0, w, h], color: [1.0; 4], premultiplied: true }]));
         }

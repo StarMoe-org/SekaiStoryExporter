@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PARAM_TABLE_VERSION: u32 = 1;
+pub const PARAM_TABLE_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamTable {
@@ -36,11 +36,30 @@ pub struct FrameState {
     /// Monotone post effect (`influence`, `tone`, `mono`) when attached.
     pub camera_color: Option<CameraColor>,
     pub talk: Option<TalkState>,
-    pub telop: Option<BannerState>,
-    pub place_info: Option<BannerState>,
-    pub full_screen_text: Option<BannerState>,
-    /// A movie the renderer cannot show yet (placeholder).
-    pub movie: Option<String>,
+    pub telop: Option<TelopState>,
+    pub place_info: Option<PlaceInfoState>,
+    pub full_screen_text: Option<FullScreenTextState>,
+    /// `ScenarioFullScreenTextDialog` cinemascope: bar height and `Base` alpha, as the
+    /// eased fraction of the shown state (0 = hidden).
+    pub cinemascope: f32,
+    /// Scenario menu button (`UIPartsMenuButton`) opacity.
+    pub menu_alpha: f32,
+    /// `PlayMovie`: the movie layer covers the scenario.
+    pub movie: Option<MovieState>,
+    /// `fx_transition_scenario` instance (`SnippetActionSpecialEffect` cases 21 / 41).
+    pub fx: Option<FxState>,
+}
+
+/// One live `fx_transition_scenario` copy. The prefab hangs off `ScenarioPlayer.effectLayer`
+/// for `DestroyAtTime.deleteAtTime` = 5 s; the renderer re-simulates `age_frames` steps from
+/// the start, so its output stays a pure function of the frame.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct FxState {
+    /// Frames since the prefab was instantiated.
+    pub age_frames: u32,
+    /// Seeds the emitters with `autoRandomSeed`; the game randomises those per instance, so
+    /// ours is derived from the instance and only has to be reproducible.
+    pub seed: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -82,6 +101,43 @@ pub struct TalkState {
     /// UTF-16 units of `body` visible (`Substring(0, n)`).
     pub visible: u32,
     pub window_alpha: f32,
+    /// Seconds since the auto signal was enabled (first talk of the episode); drives the
+    /// `TweenAlpha` blink of its icon.
+    pub auto_time: f32,
+}
+
+/// `ScenarioTelopPlayer`: seconds into the show clip, and into the hide clip once it runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelopState {
+    pub text: String,
+    pub show: f32,
+    pub hide: Option<f32>,
+}
+
+/// `ScenarioPlaceInfo`: `anchoredPosition.x` of the panel (reference pixels).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaceInfoState {
+    pub text: String,
+    pub x: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MovieState {
+    pub name: String,
+    /// Library path of the video elementary stream (`.m2v`), when the ripper produced one.
+    pub file: Option<String>,
+    /// Seconds since playback started.
+    pub time: f32,
+}
+
+/// `TextAppearFade`: character `i` (index in TMP's character list, line feeds included) has
+/// alpha `clamp(progress - i, 0, 1) × alpha`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullScreenTextState {
+    pub text: String,
+    pub progress: f32,
+    /// `FadeOutAll` multiplier.
+    pub alpha: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

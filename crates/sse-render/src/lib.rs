@@ -20,7 +20,11 @@
 //! - Masks are per-drawable at RT resolution, not the game's shared 1024² × 4 atlas
 //! - Hardware bilinear sampling (determinism R-8 asks for manual bilinear)
 
+mod fx;
+mod fx_data;
 mod gpu;
+mod movie;
+mod native_ui;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -46,12 +50,10 @@ pub enum RenderError {
 pub struct UiAssets {
     /// Full-screen 1920×1080 overlay of the dialog window.
     pub dialog: Option<PathBuf>,
-    /// Full-screen overlay of the telop band.
-    pub telop: Option<PathBuf>,
-    /// Full-screen overlay of the place-info band.
-    pub place_info: Option<PathBuf>,
     pub font_body: PathBuf,
     pub font_name: PathBuf,
+    /// Directory holding the game's UI sprites under their sprite names (`native_ui`).
+    pub sprites: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -85,11 +87,18 @@ pub struct Renderer {
     models: Vec<gpu::GpuModel>,
     images: BTreeMap<String, gpu::Image>,
     ui: UiAssets,
-    ui_images: [Option<gpu::Image>; 3],
+    dialog_overlay: Option<gpu::Image>,
+    native: native_ui::NativeUi,
+    movie: movie::MovieDecoder,
+    movie_image: gpu::Image,
+    movie_key: Option<(String, u32)>,
     body_font: sse_text::Font,
     name_font: sse_text::Font,
     text_key: Option<String>,
     lib: Library,
+    fps: u32,
+    /// `tex_common_tri_01` (the transition triangles' 4×4 atlas), from the `--ui` dir.
+    fx_atlas: Option<gpu::Image>,
 }
 
 impl Renderer {
@@ -110,11 +119,10 @@ impl Renderer {
                 None => Ok(None),
             }
         };
-        let ui_images = [
-            load_ui(&mut gpu, &ui.dialog)?,
-            load_ui(&mut gpu, &ui.telop)?,
-            load_ui(&mut gpu, &ui.place_info)?,
-        ];
+        let dialog_overlay = load_ui(&mut gpu, &ui.dialog)?;
+        let native = native_ui::NativeUi::load(&mut gpu, &ui.sprites);
+        let movie_image = gpu.image(&image::RgbaImage::new(cfg.width, cfg.height));
+        let fx_atlas = sse_assets::load_png(&ui.sprites.join("tex_common_tri_01.png")).ok().map(|i| gpu.image(&i));
         let font = |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
         Ok(Self {
             body_font: font(&ui.font_body)?,
@@ -124,9 +132,15 @@ impl Renderer {
             models,
             images: BTreeMap::new(),
             ui,
-            ui_images,
+            dialog_overlay,
+            native,
+            movie: movie::MovieDecoder::new("ffmpeg".into(), cfg.width, cfg.height, movie_rect(&cfg), table.fps),
+            movie_image,
+            movie_key: None,
             text_key: None,
             lib: lib.clone(),
+            fps: table.fps,
+            fx_atlas,
         })
     }
 
@@ -180,17 +194,38 @@ impl Renderer {
             let s = content[1] * c.scale / consts::LIVE2D_SCALE_REFERENCE_HEIGHT;
             let (qw, qh) = (rtw as f32 * s * k, rth as f32 * s * k);
             let cx = (content[0] * 0.5 + c.x) * k;
-            // Vertical anchor not reversed yet (open question #43): the RT top is placed at
-            // the screen top, which matches the game's framing (head at the top, hips at
-            // the bottom) at 16:9.
-            let bottom = qh - c.y * k;
+            // `Live2DModelView.UpdateRenderOrientation` (0x3CF9050): anchors (0.5, 0), prefab
+            // pivot (0.5, 0), `anchoredPosition` = transform data (x, y) — the RT's bottom
+            // edge sits on the screen's bottom edge (`scenarioLayer` fills the screen).
+            let top = h - qh - c.y * k;
             plan.characters.push(gpu::CharacterDraw {
                 model: c.model,
                 params: c.params.clone(),
                 opacity: c.opacity,
                 color: c.color,
-                rect: [cx - qw * 0.5, bottom - qh, qw, qh],
+                rect: [cx - qw * 0.5, top, qw, qh],
             });
+        }
+
+        // EffectLayer: `fx_transition_scenario`, re-simulated from its instantiation
+        if let (Some(fx), Some(atlas)) = (&frame.fx, &self.fx_atlas) {
+            let mut sim = fx::TransitionFx::new(fx.seed);
+            let dt = 1.0 / self.fps as f32;
+            for _ in 0..fx.age_frames {
+                sim.step(dt);
+            }
+            for (mat, corners, uv, color) in sim.billboards([w, h]) {
+                // corners are (-,-) (+,-) (+,+) (-,+) with y up; `uv` is Unity's v-up tile
+                // rect, and our atlas rows are top-down, so v flips
+                let [u0, v0, u1, v1] = uv;
+                plan.particles.push(gpu::ParticleDraw {
+                    additive: mat == fx::Material::Additive,
+                    image: atlas.id,
+                    corners,
+                    uvs: [[u0, 1.0 - v0], [u1, 1.0 - v0], [u1, 1.0 - v1], [u0, 1.0 - v1]],
+                    color,
+                });
+            }
         }
 
         // 3. fader, post
@@ -201,35 +236,49 @@ impl Renderer {
         plan.camera_color = frame.camera_color;
 
         // 4. UI
-        if frame.movie.is_some() {
-            plan.ui.push(gpu::QuadDraw::solid([0.0, 0.0, w, h], [0.0, 0.0, 0.0, 1.0]));
+        if let Some(m) = &frame.movie {
+            plan.ui_top.push(gpu::QuadDraw::solid([0.0, 0.0, w, h], [0.0, 0.0, 0.0, 1.0]));
+            if let Some(file) = &m.file {
+                let index = (m.time * self.movie_fps() as f32).round() as u32;
+                let key = (file.clone(), index);
+                if self.movie_key.as_ref() != Some(&key) {
+                    let path = self.lib.path(file);
+                    let rgba = self.movie.frame(&path, index).map_err(RenderError::Other)?.to_vec();
+                    self.gpu.upload_image(self.movie_image.id, &rgba);
+                    self.movie_key = Some(key);
+                }
+                plan.ui_top.push(gpu::QuadDraw::image(self.movie_image.id, [0.0, 0.0, w, h], [1.0; 4]));
+            }
         }
-        if let Some(t) = &frame.talk
-            && let Some(img) = &self.ui_images[0] {
+        if let Some(t) = &frame.talk {
+            if self.native.has_window() {
+                self.native.talk(&mut plan.ui, k, t.window_alpha, t.auto_time);
+            } else if let Some(img) = &self.dialog_overlay {
                 plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0, 1.0, 1.0, t.window_alpha]));
             }
-        if let Some(b) = &frame.telop
-            && let Some(img) = &self.ui_images[1] {
-                plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0, 1.0, 1.0, b.alpha]));
-            }
-        if frame.place_info.is_some()
-            && let Some(img) = &self.ui_images[2] {
-                plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0; 4]));
-            }
-        plan.text = Some(self.text_canvas(frame, k)?);
+        }
+        if frame.menu_alpha > 0.0 {
+            self.native.menu(&mut plan.ui, k, frame.menu_alpha);
+        }
+        native_ui::cinemascope(&mut plan.ui_top, k, w, h, frame.cinemascope);
+        let telop_text = frame.telop.as_ref().map(|t| self.native.telop(&mut plan.ui, k, t.show, t.hide));
+        if let Some(p) = &frame.place_info {
+            self.native.place_info(&mut plan.ui, k, p.x);
+        }
+        plan.text = Some(self.text_canvas(frame, k, telop_text)?);
 
         Ok(self.gpu.render(&mut self.models, &plan)?)
     }
 
     /// Rasterises all text of the frame; re-uploads only when it changed.
-    fn text_canvas(&mut self, frame: &FrameState, k: f32) -> Result<gpu::ImageId, RenderError> {
+    fn text_canvas(&mut self, frame: &FrameState, k: f32, telop: Option<(f32, f32)>) -> Result<gpu::ImageId, RenderError> {
         let key = format!(
             "{:?}|{:?}|{:?}|{:?}|{}",
             frame.talk.as_ref().map(|t| (&t.name, &t.body, t.visible, (t.window_alpha * 255.0) as u8)),
-            frame.telop.as_ref().map(|b| (&b.text, (b.alpha * 255.0) as u8)),
-            frame.place_info.as_ref().map(|b| &b.text),
-            frame.full_screen_text.as_ref().map(|b| (&b.text, (b.alpha * 255.0) as u8)),
-            frame.movie.as_deref().unwrap_or("")
+            frame.telop.as_ref().map(|b| (&b.text, telop.map(|(x, a)| ((x * 4.0) as i32, (a * 255.0) as u8)))),
+            frame.place_info.as_ref().map(|b| (&b.text, (b.x * 4.0) as i32)),
+            frame.full_screen_text.as_ref().map(|b| (&b.text, (b.progress * 64.0) as u32, (b.alpha * 255.0) as u8)),
+            frame.movie.as_ref().map_or("", |m| if m.file.is_some() { "" } else { m.name.as_str() })
         );
         if self.text_key.as_deref() == Some(key.as_str()) {
             return Ok(self.gpu.text_image());
@@ -237,13 +286,16 @@ impl Renderer {
         let (w, h) = (self.cfg.width as usize, self.cfg.height as usize);
         let mut canvas = sse_text::Canvas::new(w, h);
         let outline = Some([0.266_667, 0.266_667, 0.4, 0.6]);
+        // `Words`: enableAutoSizing picks the largest size in [22, 44] that fits
         let body = sse_text::Style {
-            size: 40.0,
+            size: 44.0,
             min_size: 22.0,
             auto_size: true,
             line_spacing: -80.0,
             color: [1.0, 1.0, 1.0, 1.0],
             outline,
+            underlay: None,
+            char_spacing: 0.0,
         };
         let name = sse_text::Style {
             size: 44.0,
@@ -252,6 +304,8 @@ impl Renderer {
             line_spacing: -80.0,
             color: [0.921_568_6, 0.921_568_6, 0.949_019_6, 1.0],
             outline,
+            underlay: None,
+            char_spacing: 0.0,
         };
         let banner = sse_text::Style { auto_size: false, ..body };
         let frame_at = |x: f32, y: f32, bw: f32, bh: f32, align: f32, valign: f32| sse_text::Frame {
@@ -263,21 +317,63 @@ impl Renderer {
             align,
             valign,
         };
+        let rect = |r: [f32; 4], align: f32, valign: f32| frame_at(r[0], r[1], r[2], r[3], align, valign);
         if let Some(t) = &frame.talk {
-            sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, frame_at(225.0, 775.0, 1400.0, 60.0, 0.0, 0.0), &name, t.window_alpha);
-            sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, frame_at(245.0, 845.0, 1368.3, 154.0, 0.0, 0.0), &body, t.window_alpha);
+            use native_ui::layout as l;
+            sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, rect(l::NAME, 0.0, 0.0), &name, t.window_alpha);
+            sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, rect(l::WORDS, 0.0, 0.0), &body, t.window_alpha);
+            if self.native.has_window() {
+                // `AutoSignalText`: 32, white, centre / middle, characterSpacing −4, no outline
+                let auto = sse_text::Style {
+                    size: 32.0,
+                    auto_size: false,
+                    outline: None,
+                    color: [1.0; 4],
+                    char_spacing: l::AUTO_TEXT_SPACING,
+                    ..name
+                };
+                sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect(l::AUTO_TEXT, 0.5, 0.5), &auto, t.window_alpha);
+            }
         }
-        if let Some(b) = &frame.telop {
-            sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, frame_at(0.0, 480.0, 1920.0, 120.0, 0.5, 0.5), &banner, b.alpha);
+        let plain = sse_text::Style { auto_size: false, outline: None, ..body };
+        if let (Some(b), Some((x, a))) = (&frame.telop, telop) {
+            let [l, t, w, h] = native_ui::layout::TELOP_TEXT;
+            sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, rect([l + x, t, w, h], 0.5, 0.5), &plain, a);
         }
-        if let Some(b) = &frame.place_info {
-            sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, frame_at(40.0, 31.0, 800.0, 63.0, 0.0, 0.5), &sse_text::Style { size: 36.0, ..banner }, b.alpha);
+        if let Some(p) = &frame.place_info {
+            let [l, t, w, h] = native_ui::layout::PLACE_TEXT;
+            sse_text::draw(&mut canvas, &self.body_font, &p.text, u32::MAX, rect([l + p.x, t, w, h], 0.0, 0.5), &sse_text::Style { size: 40.0, ..plain }, 1.0);
         }
         if let Some(b) = &frame.full_screen_text {
-            sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, frame_at(160.0, 140.0, 1600.0, 800.0, 0.5, 0.5), &banner, b.alpha);
+            // `ScenarioFullScreenTextDialog/Text` (`resources.assets|576995`): 56, left,
+            // middle, line spacing −32, word wrap; `TextAppearFade` per character
+            let fst = sse_text::Style {
+                size: 56.0,
+                min_size: 56.0,
+                auto_size: false,
+                line_spacing: -32.0,
+                color: [1.0; 4],
+                outline: None,
+                // SDF_Base_Scenario_Full: underlay black, offset (0, −1) → 1 × GradientScale 6 ×
+                // ScaleRatioC 0.677 atlas texels at point size 35
+                underlay: Some(([0.0, 0.0, 0.0, 1.0], 6.0 * 0.677_083_3 / 35.0)),
+                char_spacing: 0.0,
+            };
+            let text = b.text.trim_start_matches(['\n', '\r']);
+            let progress = b.progress;
+            sse_text::draw_faded(
+                &mut canvas,
+                &self.body_font,
+                text,
+                u32::MAX,
+                rect(native_ui::layout::FST_TEXT, 0.0, 0.5),
+                &fst,
+                b.alpha,
+                &|i| (progress - i as f32).clamp(0.0, 1.0),
+            );
         }
-        if let Some(m) = &frame.movie {
-            let msg = format!("[movie: {m}]");
+        if let Some(m) = frame.movie.as_ref().filter(|m| m.file.is_none()) {
+            let msg = format!("[movie: {}]", m.name);
             sse_text::draw(&mut canvas, &self.body_font, &msg, u32::MAX, frame_at(0.0, 500.0, 1920.0, 80.0, 0.5, 0.5), &banner, 0.6);
         }
         self.gpu.upload_text(&canvas.to_rgba8());
@@ -288,13 +384,38 @@ impl Renderer {
     pub fn notes() -> Vec<String> {
         vec![
             "masks rendered per drawable at RT resolution (game: shared 1024² × 4 atlas)".into(),
-            "text rasterised from Source Han Sans (not TMP SDF); layout approximated".into(),
-            "dialog / telop / place-info artwork from user-supplied overlays".into(),
-            "character vertical anchor approximated (RT top at screen top, open question #43)".into(),
+            "text rasterised from Source Han Sans (not TMP SDF); boxes, sizes and underlay from the prefabs, TMP line breaking approximated".into(),
+            "scenario UI rebuilt from the prefabs (talk-window sprites user-supplied)".into(),
         ]
+    }
+
+    /// Movie frames are decoded at the table's frame rate.
+    fn movie_fps(&self) -> u32 {
+        self.fps
+    }
+
+    /// Uses this `ffmpeg` for movie frames.
+    pub fn set_ffmpeg(&mut self, ffmpeg: PathBuf) {
+        self.movie = movie::MovieDecoder::new(ffmpeg, self.cfg.width, self.cfg.height, movie_rect(&self.cfg), self.fps);
+    }
+
+    /// Notes that depend on the supplied assets.
+    pub fn asset_notes(&self) -> Vec<String> {
+        self.native
+            .missing
+            .iter()
+            .map(|s| format!("UI sprite {s}.png not supplied; that element is not drawn"))
+            .collect()
     }
 
     pub fn ui(&self) -> &UiAssets {
         &self.ui
     }
+}
+
+/// `ScenarioPlayer.movieResolution` (2338, 1080) in target pixels.
+fn movie_rect(cfg: &RenderConfig) -> (u32, u32) {
+    let k = cfg.ui_scale();
+    let [w, h] = consts::MOVIE_RESOLUTION;
+    ((w * k).round() as u32, (h * k).round() as u32)
 }

@@ -45,6 +45,51 @@ pub const PLAYER_NAME_PLACEHOLDER: &str = "{{playerName}}";
 pub const MOVE_DURATION_NORMAL: f32 = 0.5;
 pub const MOVE_DURATION_FAST: f32 = 0.33;
 pub const MOVE_DURATION_SLOW: f32 = 0.75;
+/// `Live2DRenderStudio.fixedStagePosition.y` (`.ctor` 0x205E9B8, literal 0x529E798). In
+/// landscape `UpdateRenderOrientation` (0x205E77C) sets `stageRoot.localPosition =
+/// fixedStagePosition × orthographicSize`, and the model hangs below `stageRoot` at
+/// `standPositionLandscape` — so the model stands at y = −1.5 + 0.383 in RT world units.
+pub const LIVE2D_FIXED_STAGE_Y: f32 = -1.0;
+/// `Live2DRenderStudio` landscape `orthographicSize`.
+pub const LIVE2D_ORTHO_SIZE: f32 = 1.5;
+/// `standPositionLandscape.y`.
+pub const LIVE2D_STAND_Y: f32 = 0.383;
+/// `ScenarioStudioCamera.BlurIn/BlurOut` → `SetBlurEffect(iteration: 3, size, downSample: 2)`
+/// with `size` from 0 to 3 (`rendering.md`); `RenderBlur` 0x4A15AC4 uses them as below.
+pub const BLUR_ITERATIONS: u32 = 3;
+pub const BLUR_DOWN_SAMPLE: u32 = 2;
+pub const BLUR_MAX_SPREAD: f32 = 3.0;
+/// `ScenarioPlayer.movieResolution` (`.ctor` 0x16B9B04, literal 0x529D340): size of the
+/// centred movie `RawImage`.
+pub const MOVIE_RESOLUTION: [f32; 2] = [2338.0, 1080.0];
+/// `ScreenSlideInOut.<Play>d__7` (0x16EB2B4): `DOAnchorPos(to, 0.2)` + `SetEase(OutQuart)`.
+pub const PLACE_INFO_SLIDE_DURATION: f32 = 0.2;
+/// `UILayer/TopLeft2/PlaceInfo` width (`resources.assets|60657`, pivot (0, 1), anchored x 0).
+pub const PLACE_INFO_WIDTH: f32 = 580.0;
+/// `CanvasRoot/UICamera` (`level*|Camera`): orthographic, size 1; the root canvas is
+/// Screen Space - Camera, centred on the camera at world x 0.
+pub const UI_CAMERA_ORTHO_SIZE: f32 = 1.0;
+
+/// `ScenarioPlaceInfo.DefaultPosX = −(rt.position.x + rect.width)`: a *world* x plus a
+/// reference-pixel width. `Reset` and `Hide` both evaluate it while the panel sits at
+/// anchored x 0, i.e. with its pivot on the canvas' left edge: world x
+/// `−ortho × content_w / content_h` (canvas height spans `2 × ortho` world units).
+/// 16:9 → −(580 − 1.778) = −578.22.
+pub fn place_info_hidden_x(content_size: [f32; 2]) -> f32 {
+    let left = -UI_CAMERA_ORTHO_SIZE * content_size[0] / content_size[1];
+    -(left + PLACE_INFO_WIDTH)
+}
+/// SekaiIn (20 / 40): `ColorFader.Set(white)` then fades to transparent after this delay.
+pub const SEKAI_IN_FADE_DELAY: f32 = 0.25;
+/// `DestroyAtTime.deleteAtTime` on `fx_transition_scenario` (`resources.assets|15600`).
+pub const FX_LIFETIME: f32 = 5.0;
+/// SekaiOut (21 / 41): fades to opaque white after this delay (with the particle prefab).
+pub const SEKAI_OUT_FADE_DELAY: f32 = 0.5;
+/// Delay before a hide fade when the character stays in place (`0x3E19999A`,
+/// `SnippetActionCharacterLayout` 0x16DB774).
+pub const HIDE_DELAY_IN_PLACE: f32 = 0.15;
+/// Added to the move duration for a sliding hide (`0xBDCCCCCD` = -0.1, 0x16DB838).
+pub const HIDE_SLIDE_FADE_OFFSET: f32 = -0.1;
 /// `layout.character_fade_duration`.
 pub const CHARACTER_FADE_DURATION: f32 = 0.1;
 /// `layout.yaml` `transform_map`: side X for DefaultMode / ThreeMode.
@@ -64,8 +109,27 @@ pub const AUTO_NEXT_PAGE_DELAY: f32 = 2.0;
 pub const AUTO_WAIT_AFTER_VOICE: f32 = 0.5;
 /// `talk.auto_voice_timeout`.
 pub const AUTO_VOICE_TIMEOUT: f32 = 30.0;
+
+/// `ScenarioFullScreenTextDialog.playDuration` (static, `.cctor` 0x169DB80): cinemascope
+/// tween, hold after the voice, and `FadeOutAll` duration.
+pub const FST_PLAY_DURATION: f32 = 1.0;
+/// `ScenarioFullScreenTextDialog.cinemascopeHeight` (static): bar height in reference pixels.
+pub const FST_CINEMASCOPE_HEIGHT: f32 = 240.0;
+/// `baseCinemascope` alpha while the bars are shown (`PlayCinemascope` 0x169DC00).
+pub const FST_BASE_ALPHA: f32 = 0.5;
+/// `UniTask.Delay(0.5 s)` after the bars on `ViewType.First` (`PlayCore` 0x169E140).
+pub const FST_OPEN_DELAY: f32 = 0.5;
+/// `TextAppearFade.textWait` (prefab `resources.assets|572433`): per-slot fade-in time.
+pub const FST_TEXT_WAIT: f32 = 0.125;
+/// Voice wait cap in `PlayCore` (`t >= 10`).
+pub const FST_VOICE_TIMEOUT: f32 = 10.0;
+/// `new TMP_TextInfo()` allocates `characterInfo[8]`.
+pub const TMP_CHARACTER_INFO_INITIAL: u32 = 8;
 /// `talk.window_fade_duration`.
 pub const TALK_WINDOW_FADE_DURATION: f32 = 0.15;
+/// `TalkWindow.Open` / `Close` (0x16E57FC / 0x16E5B98): `PlayActive(1 | 0, 0.2)`, linear.
+/// Typing starts from `OnCompleteOpen`, i.e. after the fade-in.
+pub const TALK_WINDOW_OPEN_CLOSE_DURATION: f32 = 0.2;
 /// `talk.line_advance_px`.
 pub const TALK_LINE_ADVANCE_PX: f32 = 48.0;
 
@@ -173,6 +237,20 @@ mod tests {
         check("sound.default_bgm_fade", DEFAULT_BGM_FADE);
         check("telop.auto_hold", TELOP_AUTO_HOLD);
         check("telop.anim_clip_length", TELOP_ANIM_CLIP_LENGTH);
+        check("fst.play_duration", FST_PLAY_DURATION);
+        check("fst.cinemascope_height", FST_CINEMASCOPE_HEIGHT);
+        check("fst.base_alpha", FST_BASE_ALPHA);
+        check("fst.open_delay", FST_OPEN_DELAY);
+        check("fst.text_wait", FST_TEXT_WAIT);
+        check("fst.voice_timeout", FST_VOICE_TIMEOUT);
+        check("layout.hide_delay_in_place", HIDE_DELAY_IN_PLACE);
+        check("layout.hide_slide_fade_offset", HIDE_SLIDE_FADE_OFFSET);
+        check("sekai.in_fade_delay", SEKAI_IN_FADE_DELAY);
+        check("sekai.out_fade_delay", SEKAI_OUT_FADE_DELAY);
+        check("talk.window_open_close_duration", TALK_WINDOW_OPEN_CLOSE_DURATION);
+        check("place_info.width", PLACE_INFO_WIDTH);
+        check("fx.transition_lifetime", FX_LIFETIME);
+        check("ui.camera_ortho_size", UI_CAMERA_ORTHO_SIZE);
         check("sekai_transition.lifetime", SEKAI_TRANSITION_LIFETIME);
         check("live2d.body_motion_fade", BODY_MOTION_FADE);
         check("live2d.facial_fade", FACIAL_FADE);
@@ -180,6 +258,12 @@ mod tests {
         check("live2d.scale_reference_height", LIVE2D_SCALE_REFERENCE_HEIGHT);
         check("screen.outside_fill_offset_x", OUTSIDE_FILL_OFFSET_X);
         check("frame.story_target_frame_rate", STORY_TARGET_FRAME_RATE as f32);
+    }
+
+    #[test]
+    fn place_info_hidden_x_uses_the_canvas_world_edge() {
+        let x = place_info_hidden_x([1920.0, 1080.0]);
+        assert!((x - (-(580.0 - 16.0 / 9.0))).abs() < 1e-4, "{x}");
     }
 
     #[test]

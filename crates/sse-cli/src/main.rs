@@ -30,7 +30,14 @@ enum Command {
     /// Print the IR of an episode as JSON.
     Inspect { selector: String },
     /// Print the compiled timeline of an episode as JSON.
-    Timeline { selector: String },
+    Timeline {
+        selector: String,
+        /// Simulate at this (possibly fractional) frame rate instead of the story's 60 fps.
+        /// For comparing the pacing model with a capture of a slowed-down game; frame
+        /// numbers in the output are then simulation frames at this rate.
+        #[arg(long)]
+        sim_fps: Option<f32>,
+    },
     /// Run Pass 1 and print a summary (or one frame's state with --frame).
     Bake {
         selector: String,
@@ -85,10 +92,9 @@ impl OutputArgs {
         };
         sse_render::UiAssets {
             dialog: opt("Dialogue_Background.png"),
-            telop: opt("SceneText_Background.png"),
-            place_info: opt("SceneText_TopLeft.png"),
             font_body: self.ui.join("SourceHanSansSC-Medium.otf"),
             font_name: self.ui.join("SourceHanSansSC-Bold.otf"),
+            sprites: self.ui.clone(),
         }
     }
 
@@ -111,9 +117,13 @@ fn main() -> Result<()> {
             let ep = load(&lib, selector, &opts)?;
             println!("{}", serde_json::to_string_pretty(&ep)?);
         }
-        Command::Timeline { selector } => {
+        Command::Timeline { selector, sim_fps } => {
             let ep = load(&lib, selector, &opts)?;
-            let tl = sse_timeline::compile(&lib, &ep, TimeBase::story())?;
+            let tb = match sim_fps {
+                Some(f) => TimeBase::with_delta(f.round() as u32, 1.0 / f),
+                None => TimeBase::story(),
+            };
+            let tl = sse_timeline::compile(&lib, &ep, tb)?;
             println!("{}", serde_json::to_string_pretty(&tl)?);
         }
         Command::Render { selector, frame, output, out } => {
@@ -130,6 +140,7 @@ fn main() -> Result<()> {
         Command::Export { selector, output, from, to, crf, ffmpeg, out } => {
             let table = bake(&lib, selector, &opts, out.config())?;
             let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets())?;
+            r.set_ffmpeg(ffmpeg.clone());
             let n = table.frames.len() as u32;
             let range = from.unwrap_or(0).min(n)..to.unwrap_or(n).min(n);
             let vopts = sse_export::VideoOptions {
@@ -149,6 +160,7 @@ fn main() -> Result<()> {
             let report = output.with_extension("report.txt");
             let mut notes = table.notes.clone();
             notes.extend(sse_render::Renderer::notes());
+            notes.extend(r.asset_notes());
             std::fs::write(&report, notes.join("\n") + "\n")?;
             println!("wrote {} (notes: {})", output.display(), report.display());
         }

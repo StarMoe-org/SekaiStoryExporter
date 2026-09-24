@@ -72,32 +72,105 @@ impl Tween {
     }
 }
 
-struct Banner {
-    text: String,
-    start: u32,
-    end: u32,
-    fade: u32,
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PlaceStatus {
+    SlideIn,
+    Active,
+    SlideOut,
 }
 
-impl Banner {
-    fn state(&self, f: u32) -> Option<BannerState> {
-        if f < self.start || f >= self.end {
+/// `ScenarioPlaceInfo` (`ScreenSlideInOut`: `DOAnchorPos(to, 0.2)` with `Ease.OutQuart`).
+struct PlaceInfoRt {
+    text: String,
+    from: f32,
+    to: f32,
+    start: u32,
+    status: PlaceStatus,
+    reserve_close: bool,
+    /// `DefaultPosX` ([`consts::place_info_hidden_x`]).
+    hidden_x: f32,
+}
+
+impl PlaceInfoRt {
+    fn frames(tb: TimeBase) -> u32 {
+        tb.frames_for(consts::PLACE_INFO_SLIDE_DURATION).max(1)
+    }
+
+    fn x_at(&self, f: u32, tb: TimeBase) -> f32 {
+        let t = (f.saturating_sub(self.start) as f32 / Self::frames(tb) as f32).min(1.0);
+        let e = 1.0 - (1.0 - t).powi(4); // OutQuart
+        self.from + (self.to - self.from) * e
+    }
+
+    /// Settles a finished slide-in (and a reserved close) before frame `f`.
+    fn advance(&mut self, f: u32, tb: TimeBase) {
+        let end = self.start + Self::frames(tb);
+        if self.status == PlaceStatus::SlideIn && f >= end {
+            self.status = PlaceStatus::Active;
+            if self.reserve_close {
+                self.reserve_close = false;
+                self.start_slide_out(end);
+            }
+        }
+    }
+
+    fn start_slide_out(&mut self, f: u32) {
+        self.from = self.to;
+        self.to = self.hidden_x;
+        self.start = f;
+        self.status = PlaceStatus::SlideOut;
+    }
+
+    /// `ScenarioPlaceInfo.Hide`: slides out when active, reserves when still sliding in.
+    fn hide(&mut self, f: u32, tb: TimeBase) {
+        self.advance(f, tb);
+        match self.status {
+            PlaceStatus::Active => self.start_slide_out(f),
+            PlaceStatus::SlideIn => self.reserve_close = true,
+            PlaceStatus::SlideOut => {}
+        }
+    }
+
+    fn state(&mut self, f: u32, tb: TimeBase) -> Option<PlaceInfoState> {
+        self.advance(f, tb);
+        if self.status == PlaceStatus::SlideOut && f >= self.start + Self::frames(tb) {
+            return None; // `SetActive(false)` after the slide-out
+        }
+        Some(PlaceInfoState { text: self.text.clone(), x: self.x_at(f, tb) })
+    }
+}
+
+/// One `ScenarioFullScreenTextDialog.PlayCore` run.
+struct FstRun {
+    text: String,
+    end: u32,
+    timing: sse_timeline::FstTiming,
+}
+
+impl FstRun {
+    fn state(&self, f: u32, tb: TimeBase) -> Option<FullScreenTextState> {
+        let t = &self.timing;
+        if f < t.text_start || f >= self.end {
             return None;
         }
-        let a_in = if self.fade == 0 {
-            1.0
+        // TextAppearFade.Play: slot i fades in over frames [start + i·n, start + (i+1)·n),
+        // showing alpha = elapsed / textWait before each yield.
+        let k = f - t.text_start;
+        let n = t.frames_per_slot.max(1);
+        let slot = k / n;
+        let progress = if slot >= t.slots {
+            t.slots as f32
         } else {
-            ((f - self.start) as f32 / self.fade as f32).min(1.0)
+            slot as f32 + ((k % n) as f32 * tb.delta() / consts::FST_TEXT_WAIT).min(1.0)
         };
-        let a_out = if self.fade == 0 {
-            1.0
-        } else {
-            ((self.end - f) as f32 / self.fade as f32).min(1.0)
+        let alpha = match t.fade_start {
+            Some(s) if f >= s => {
+                1.0 - ((f - s) as f32 / tb.frames_for(consts::FST_PLAY_DURATION) as f32).min(1.0)
+            }
+            _ => 1.0,
         };
-        Some(BannerState {
-            text: self.text.clone(),
-            alpha: a_in.min(a_out),
-        })
+        Some(FullScreenTextState { text: self.text.clone(), progress, alpha })
     }
 }
 
@@ -125,11 +198,19 @@ struct Baker<'a> {
     blur_value: f32,
     camera_color: Option<CameraColor>,
     talk: Option<(u32, TalkState)>,
+    /// Frame the first talk window appeared (auto signal enabled).
+    auto_since: Option<u32>,
     talk_window: Option<Tween>,
-    telop: Vec<Banner>,
-    place_info: Option<(String, u32)>,
-    full_text: Vec<Banner>,
-    movie: Option<(String, u32)>,
+    /// (text, start, hide clip start, end)
+    telop: Vec<(String, u32, u32, u32)>,
+    place_info: Option<PlaceInfoRt>,
+    full_text: Vec<FstRun>,
+    /// `PlayCinemascope(show)` calls: (start frame, show).
+    cinemascope: Vec<(u32, bool)>,
+    /// (name, video file, start frame, end frame)
+    movie: Option<(String, Option<String>, u32, u32)>,
+    /// `fx_transition_scenario`: (first frame, frames until `DestroyAtTime`).
+    fx: Option<(u32, u32)>,
     audio: Vec<AudioCue>,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
@@ -175,7 +256,10 @@ impl<'a> Baker<'a> {
             telop: Vec::new(),
             place_info: None,
             full_text: Vec::new(),
+            cinemascope: Vec::new(),
+            auto_since: None,
             movie: None,
+            fx: None,
             audio: Vec::new(),
             bgm: None,
             se_loops: BTreeMap::new(),
@@ -349,7 +433,8 @@ impl<'a> Baker<'a> {
         c.opacity = Tween {
             from: 0.0,
             to: 1.0,
-            start: frame,
+            // FadeOpacityCoroutine starts with WaitForSeconds(0): one frame at opacity 0
+            start: if fade { frame + 1 } else { frame },
             frames: if fade {
                 self.tb.frames_for(consts::CHARACTER_FADE_DURATION)
             } else {
@@ -418,14 +503,15 @@ impl<'a> Baker<'a> {
         });
     }
 
-    fn hide_talk_window(&mut self, frame: u32) {
+    /// `TalkWindow.Close` (0.2 s) or `SetVisible(false)` (0.15 s).
+    fn hide_talk_window(&mut self, frame: u32, seconds: f32) {
         if self.talk.is_some() {
             let a = self.talk_window.as_ref().map_or(1.0, |t| t.at(frame));
             self.talk_window = Some(Tween {
                 from: a,
                 to: 0.0,
                 start: frame,
-                frames: self.tb.frames_for(consts::TALK_WINDOW_FADE_DURATION),
+                frames: self.tb.frames_for(seconds),
                 ease_out_quad: false,
             });
         }
@@ -529,15 +615,17 @@ impl<'a> Baker<'a> {
         match &instr.kind {
             InstrKind::Wait => {}
             InstrKind::Talk(t) => {
-                if self.talk.is_none() || self.talk_window.as_ref().is_some_and(|w| w.to == 0.0) {
+                // `TalkWindow.Open`: PlayActive(1, 0.2) from alpha 0, linear
+                if timing.talk.as_ref().is_some_and(|tt| tt.opens_window) {
                     self.talk_window = Some(Tween {
                         from: 0.0,
                         to: 1.0,
                         start: f,
-                        frames: self.tb.frames_for(consts::TALK_WINDOW_FADE_DURATION),
+                        frames: self.tb.frames_for(consts::TALK_WINDOW_OPEN_CLOSE_DURATION),
                         ease_out_quad: false,
                     });
                 }
+                self.auto_since.get_or_insert(f);
                 self.talk = Some((
                     instr.index,
                     TalkState {
@@ -545,6 +633,7 @@ impl<'a> Baker<'a> {
                         body: t.body.clone(),
                         visible: 0,
                         window_alpha: 1.0,
+                        auto_time: 0.0,
                     },
                 ));
                 for s in &t.speakers {
@@ -572,17 +661,12 @@ impl<'a> Baker<'a> {
                         }
                     }
                 }
-                for m in &t.motions {
-                    let at = match t.motion_change {
-                        MotionChangeFactor::PlayTime => f + self.tb.frames_for(m.timing_sync_value),
-                        MotionChangeFactor::Text => f,
-                    };
+                // the timeline's `talk_motion_schedule`; entries due now play in this frame
+                for &(at, k) in &tt.motions {
+                    let m = &t.motions[k];
                     if let Some(c) = self.chars.get_mut(&m.character) {
                         c.pending.push((at, m.motion.clone(), m.facial.clone()));
                     }
-                }
-                if !t.motions.is_empty() {
-                    note(&mut self.notes, "talk-embedded motions switch at TimingSyncValue seconds (PlayTime) or immediately (Text)");
                 }
                 if let Some(e) = &t.attached_effect {
                     self.effect(instr.index, e, f);
@@ -614,12 +698,14 @@ impl<'a> Baker<'a> {
                         c.y = y;
                     }
                 }
-                LayoutOp::Hide => {
+                LayoutOp::Hide { delay } => {
+                    // FadeOpacityCoroutine: WaitForSeconds(delay) (>= 1 frame), then the fade
+                    let start = f + self.tb.frames_for(*delay).max(1);
                     let frames = self.tb.frames_for(consts::CHARACTER_FADE_DURATION);
                     if let Some(c) = self.chars.get_mut(&l.character) {
                         let cur = c.opacity.at(f);
-                        c.opacity = Tween { from: cur, to: 0.0, start: f, frames, ease_out_quad: false };
-                        c.hide_at = Some(f + frames);
+                        c.opacity = Tween { from: cur, to: 0.0, start, frames, ease_out_quad: false };
+                        c.hide_at = Some(start + frames);
                     }
                 }
                 LayoutOp::Shake { .. } => note(&mut self.notes, "character shake not rendered"),
@@ -636,8 +722,10 @@ impl<'a> Baker<'a> {
             }
             InstrKind::Unsupported(u) => {
                 if let UnsupportedReason::Movie { name, files } = &u.reason {
-                    self.hide_talk_window(f);
-                    self.movie = Some((name.clone(), timing.finish));
+                    // PlayMovie → SetHideUI(true) → RefreshTalkWindow → SetVisible(false)
+                    self.hide_talk_window(f, consts::TALK_WINDOW_FADE_DURATION);
+                    let video = files.iter().find(|x| x.0.ends_with(".m2v")).map(|x| x.0.clone());
+                    self.movie = Some((name.clone(), video, f, timing.finish));
                     if let Some(w) = files.iter().find(|x| x.0.ends_with(".wav")) {
                         let a = AudioRef { cue: name.clone(), files: vec![w.clone()] };
                         self.one_shot(&a, f, 1.0, AudioKind::Movie);
@@ -646,7 +734,7 @@ impl<'a> Baker<'a> {
                     for c in self.chars.values_mut() {
                         c.visible = false;
                     }
-                    note(&mut self.notes, "movies are not decoded yet: a placeholder is shown (audio plays)");
+                    note(&mut self.notes, "movies: video decoded with ffmpeg into the 2338×1080 movie rect (CRI Mana decoder not used)");
                 } else {
                     note(&mut self.notes, &format!("unsupported snippet: {:?}", u.reason));
                 }
@@ -671,12 +759,16 @@ impl<'a> Baker<'a> {
 
     fn finish(&mut self, instr: &Instr, f: u32) {
         if let InstrKind::Talk(t) = &instr.kind {
-            self.place_info = None;
+            // `OnFinishTalkWindow`: `if (placeInfo.IsActive) placeInfo.Hide()`
+            let tb = self.tb;
+            if let Some(p) = &mut self.place_info {
+                p.hide(f, tb);
+            }
             for c in self.chars.values_mut() {
                 c.lip.end_text(f);
             }
             if t.close_window_on_finish {
-                self.hide_talk_window(f);
+                self.hide_talk_window(f, consts::TALK_WINDOW_OPEN_CLOSE_DURATION);
             }
         }
     }
@@ -700,7 +792,6 @@ impl<'a> Baker<'a> {
                     ),
                     // Out: from the current colour to opaque
                     Direction::Out => {
-                        self.hide_talk_window(f);
                         let from = if self.fader[3] == 0.0 {
                             [rgb[0], rgb[1], rgb[2], 0.0]
                         } else {
@@ -709,7 +800,6 @@ impl<'a> Baker<'a> {
                         self.fade_color([rgb[0], rgb[1], rgb[2], 1.0], Some(from), f, d);
                     }
                 }
-                note(&mut self.notes, "ColorFader is drawn above characters and below the talk window (layer not reversed)");
             }
             EffectOp::ChangeBackground { background, .. } => {
                 let new = background.as_ref().map(|b| b.0.clone());
@@ -719,23 +809,36 @@ impl<'a> Baker<'a> {
                 self.bg_tween = Some(Tween { from: 0.0, to: 1.0, start: f, frames, ease_out_quad: false });
             }
             EffectOp::Telop { text } => {
-                self.hide_talk_window(f);
-                let fade = self.tb.frames_for(consts::TELOP_ANIM_CLIP_LENGTH);
-                self.telop.push(Banner { text: text.clone(), start: f, end: timing.finish, fade });
-                note(&mut self.notes, "telop show/hide animations approximated as alpha fades");
+                let clip = self.tb.frames_for(consts::TELOP_ANIM_CLIP_LENGTH);
+                self.telop.push((text.clone(), f, timing.finish.saturating_sub(clip), timing.finish));
             }
             EffectOp::PlaceInfo { text } => {
-                self.place_info = Some((text.clone(), f));
+                // `ScenarioPlaceInfo.Show`: from the current x (after `Reset`, DefaultPosX) to 0
+                let hidden_x = consts::place_info_hidden_x(self.opts.content_size);
+                let from = self.place_info.as_ref().map_or(hidden_x, |p| p.x_at(f, self.tb));
+                self.place_info = Some(PlaceInfoRt {
+                    text: text.clone(),
+                    from,
+                    to: 0.0,
+                    start: f,
+                    status: PlaceStatus::SlideIn,
+                    reserve_close: false,
+                    hidden_x,
+                });
             }
             EffectOp::FullScreenText { text, voice, .. } => {
-                self.hide_talk_window(f);
-                let fade = self.tb.frames_for(consts::SCENARIO_FADE_TIME);
-                self.full_text.push(Banner { text: text.clone(), start: f, end: timing.finish, fade });
+                let Some(t) = timing.full_screen_text.clone() else { return };
+                if t.first {
+                    self.cinemascope.push((f, true));
+                }
+                if let Some(fade) = t.fade_start {
+                    self.cinemascope.push((fade, false));
+                }
                 if let Some(a) = voice {
                     let a = a.clone();
-                    self.one_shot(&a, f, 1.0, AudioKind::Voice);
+                    self.one_shot(&a, t.text_start, 1.0, AudioKind::Voice);
                 }
-                note(&mut self.notes, "FullScreenText layout approximated (centred white text)");
+                self.full_text.push(FstRun { text: text.clone(), end: timing.finish, timing: t });
             }
             EffectOp::Blur { dir } => {
                 let (from, to) = match dir {
@@ -743,7 +846,6 @@ impl<'a> Baker<'a> {
                     Direction::Out => (self.blur_value, 0.0),
                 };
                 self.blur = Some(Tween { from, to, start: f, frames: self.tb.frames_for(d), ease_out_quad: true });
-                note(&mut self.notes, "camera blur strength approximated (iteration/size not reversed)");
             }
             EffectOp::CameraColor { effect } => {
                 self.camera_color = Some(match effect {
@@ -767,12 +869,38 @@ impl<'a> Baker<'a> {
                     AmbientColor::Night => consts::MODEL_COLOR_NIGHT,
                 };
             }
-            EffectOp::SekaiTransition { .. } => {
-                note(&mut self.notes, "Sekai transition particles not rendered (timing approximated)");
+            EffectOp::SekaiTransition { dir, .. } => {
+                let (delay, from, to) = match dir {
+                    Direction::In => (consts::SEKAI_IN_FADE_DELAY, [1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 0.0]),
+                    Direction::Out => (consts::SEKAI_OUT_FADE_DELAY, self.fader, [1.0, 1.0, 1.0, 1.0]),
+                };
+                if *dir == Direction::In {
+                    self.fader = from;
+                    self.fader_tween = None;
+                }
+                let start = f + self.tb.frames_for(delay);
+                self.fade_color(to, Some(if *dir == Direction::Out && from[3] == 0.0 { [1.0, 1.0, 1.0, 0.0] } else { from }), start, d);
+                // Case 21 / 41 instantiate `fx_transition_scenario` under `effectLayer`;
+                // case 20 / 40 only drive the fader. The copy is destroyed after 5 s.
+                if *dir == Direction::Out {
+                    self.fx = Some((f, self.tb.frames_for(consts::FX_LIFETIME)));
+                }
+                note(&mut self.notes, "Sekai transition particles: fx_transition_scenario simulated from the prefab modules (noise approximated)");
             }
             EffectOp::Noop => {}
             other => note(&mut self.notes, &format!("effect not rendered: {other:?}")),
         }
+    }
+
+    /// `PlayCinemascope`: DOTween (default ease OutQuad) over `playDuration`.
+    fn cinemascope_at(&self, f: u32) -> f32 {
+        let Some(&(start, show)) = self.cinemascope.iter().rev().find(|(s, _)| *s <= f) else {
+            return 0.0;
+        };
+        let n = self.tb.frames_for(consts::FST_PLAY_DURATION).max(1);
+        let t = ((f - start) as f32 / n as f32).min(1.0);
+        let e = -t * (t - 2.0);
+        if show { e } else { 1.0 - e }
     }
 
     fn snapshot(&mut self, f: u32) -> FrameState {
@@ -820,10 +948,15 @@ impl<'a> Baker<'a> {
                 body: t.body.clone(),
                 visible,
                 window_alpha: self.talk_window.as_ref().map_or(1.0, |w| w.at(f)),
+                auto_time: self.auto_since.map_or(0.0, |s| f.saturating_sub(s) as f32 * self.tb.delta()),
             }
         });
         let movie = match &self.movie {
-            Some((name, end)) if f < *end => Some(name.clone()),
+            Some((name, file, start, end)) if f < *end => Some(MovieState {
+                name: name.clone(),
+                file: file.clone(),
+                time: (f - start) as f32 * self.tb.delta(),
+            }),
             _ => None,
         };
         FrameState {
@@ -833,10 +966,20 @@ impl<'a> Baker<'a> {
             blur: self.blur_value,
             camera_color: self.camera_color,
             talk: talk.filter(|t| t.window_alpha > 0.0),
-            telop: self.telop.iter().find_map(|b| b.state(f)),
-            place_info: self.place_info.as_ref().map(|(t, _)| BannerState { text: t.clone(), alpha: 1.0 }),
-            full_screen_text: self.full_text.iter().find_map(|b| b.state(f)),
+            telop: self.telop.iter().find(|t| f >= t.1 && f < t.3).map(|(text, start, hide, _)| TelopState {
+                text: text.clone(),
+                show: (f - start) as f32 * self.tb.delta(),
+                hide: (f >= *hide).then(|| (f - hide) as f32 * self.tb.delta()),
+            }),
+            place_info: self.place_info.as_mut().and_then(|p| p.state(f, self.tb)),
+            full_screen_text: self.full_text.iter().find_map(|b| b.state(f, self.tb)),
+            cinemascope: self.cinemascope_at(f),
+            menu_alpha: if movie.is_some() { 0.0 } else { 1.0 },
             movie,
+            fx: self.fx.and_then(|(start, frames)| {
+                (f >= start && f < start + frames)
+                    .then_some(sse_params::FxState { age_frames: f - start, seed: start.wrapping_mul(2654435761) })
+            }),
         }
     }
 }

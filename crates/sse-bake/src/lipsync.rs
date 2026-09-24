@@ -103,7 +103,9 @@ impl Lip {
                 let a = rms * *tvs;
                 let mut target = a * det_math::powf(a + 1.0, *pow_k);
                 target = if target < 0.06 { 0.0 } else { target.clamp(0.2, 1.0) };
-                let (kt, kp) = if target < 0.1 {
+                // `Live2DVoice.UpdateParam` (0x205DD20): the weights depend on the *current*
+                // value (== prev, both are written with the result), not on the target
+                let (kt, kp) = if *prev < 0.1 {
                     (0.6, 0.4)
                 } else if (target - *prev).abs() < 0.1 {
                     (0.2, 0.8)

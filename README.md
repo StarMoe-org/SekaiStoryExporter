@@ -57,8 +57,11 @@ ripper --out <ripper-out> rip unit:school-refusal-story-chapter/1
 
 # 2. 准备（均由你自行获取，不随本仓库分发）
 #    - Live2D Cubism SDK for Native（接受其条款），设置 SSE_CUBISM_CORE_DIR=<sdk>/Core
-#    - --ui 目录：SourceHanSansSC-Medium.otf / -Bold.otf（思源黑体，SIL OFL），
-#      Dialogue_Background.png / SceneText_Background.png / SceneText_TopLeft.png（1920×1080 叠层，见决策 Q41）
+#    - --ui 目录：SourceHanSansSC-Medium.otf / -Bold.otf（思源黑体，SIL OFL）；
+#      从自己的客户端（ipa 的 data.unity3d）导出的 UI sprite，按 sprite 名存为 PNG：
+#      bg_story_adv / bg_base_half_r8_wh / bg_base_round_h48_wh / icon_triangle_h22_wh /
+#      btn_circle_h80_wh / icon_menu_story_wh（缺哪张就不画哪个元素，并写入报告）；
+#      没有 bg_story_adv 时退回 Dialogue_Background.png 叠层
 export SSE_CUBISM_CORE_DIR=/path/to/CubismSdkForNative/Core
 cargo build --release -p sse-cli
 
