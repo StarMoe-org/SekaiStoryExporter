@@ -463,7 +463,7 @@ impl Renderer {
     pub fn notes() -> Vec<String> {
         vec![
             "masks rendered per drawable at RT resolution (game: shared 1024² × 4 atlas)".into(),
-            "text rasterised from Source Han Sans (not TMP SDF); boxes, sizes and underlay from the prefabs, TMP line breaking approximated".into(),
+            "text rasterised from the --ui font (CN Source Han Sans SC, JP FOT-RodinNTLG Pro; not TMP SDF); boxes, sizes and underlay from the prefabs, TMP line breaking approximated".into(),
             "scenario UI rebuilt from the prefabs (talk-window sprites user-supplied)".into(),
         ]
     }
