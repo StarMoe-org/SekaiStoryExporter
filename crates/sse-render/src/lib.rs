@@ -274,7 +274,8 @@ impl Renderer {
         if let Some(t) = &frame.talk {
             if self.native.has_window() {
                 let first = plan.ui.len();
-                self.native.talk(&mut plan.ui, k, t.window_alpha, t.auto_time);
+                let auto_w = self.name_font.preferred_width("AUTO", native_ui::layout::AUTO_TEXT_SIZE, native_ui::layout::AUTO_TEXT_SPACING);
+                self.native.talk(&mut plan.ui, k, t.window_alpha, t.auto_time, auto_w);
                 // ShakeWindow moves `windowRectTransform` (the window, name and words)
                 let [wx, wy] = frame.window_shake;
                 for q in &mut plan.ui[first..] {
@@ -409,7 +410,8 @@ impl Renderer {
                     char_spacing: l::AUTO_TEXT_SPACING,
                     ..name
                 };
-                sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect(l::AUTO_TEXT, 0.5, 0.5), &auto, t.window_alpha);
+                let auto_w = self.name_font.preferred_width("AUTO", l::AUTO_TEXT_SIZE, l::AUTO_TEXT_SPACING);
+                sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect(shaken(l::auto_text(auto_w)), 0.5, 0.5), &auto, t.window_alpha);
             }
         }
         let plain = sse_text::Style { auto_size: false, outline: None, ..body };
