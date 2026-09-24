@@ -30,7 +30,14 @@ enum Command {
     /// Print the IR of an episode as JSON.
     Inspect { selector: String },
     /// Print the compiled timeline of an episode as JSON.
-    Timeline { selector: String },
+    Timeline {
+        selector: String,
+        /// Simulate at this (possibly fractional) frame rate instead of the story's 60 fps.
+        /// For comparing the pacing model with a capture of a slowed-down game; frame
+        /// numbers in the output are then simulation frames at this rate.
+        #[arg(long)]
+        sim_fps: Option<f32>,
+    },
     /// Run Pass 1 and print a summary (or one frame's state with --frame).
     Bake {
         selector: String,
@@ -111,9 +118,13 @@ fn main() -> Result<()> {
             let ep = load(&lib, selector, &opts)?;
             println!("{}", serde_json::to_string_pretty(&ep)?);
         }
-        Command::Timeline { selector } => {
+        Command::Timeline { selector, sim_fps } => {
             let ep = load(&lib, selector, &opts)?;
-            let tl = sse_timeline::compile(&lib, &ep, TimeBase::story())?;
+            let tb = match sim_fps {
+                Some(f) => TimeBase::with_delta(f.round() as u32, 1.0 / f),
+                None => TimeBase::story(),
+            };
+            let tl = sse_timeline::compile(&lib, &ep, tb)?;
             println!("{}", serde_json::to_string_pretty(&tl)?);
         }
         Command::Render { selector, frame, output, out } => {

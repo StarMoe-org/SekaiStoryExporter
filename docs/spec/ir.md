@@ -35,7 +35,7 @@ ripper-episode 索引 + ScenarioSceneData JSON
 
 ```rust
 pub struct Episode {
-    pub ir_version: u32,               // = 1
+    pub ir_version: u32,               // = 2
     pub source: EpisodeSource,         // selector、scenarioId（masterdata 侧）、assetVersion
     pub cast: BTreeMap<CharacterId, CastEntry>,
     pub initial: InitialState,
@@ -103,7 +103,7 @@ pub struct Instr {
 |---|---|---|
 | 0 None | `Wait` | 无 |
 | 1 Talk | `Talk(Talk)` | 见 §3.2 |
-| 2 CharacerLayout | `Layout(LayoutOp)` | `Move{to, offset_x, duration}` / `Appear{from, offset_x, costume?, motion?, facial?, depth}` / `Hide` / `Shake{axis, …}` / `Depth(DepthType)` |
+| 2 CharacerLayout | `Layout(LayoutOp)` | `Move{to, offset_x, duration}` / `Appear{from, offset_x, costume?, motion?, facial?, depth}` / `Hide{delay}`（v2：退场淡出前的等待，原地 0.15 s，滑出 = 移动时长 − 0.1 s）/ `Shake{axis, …}` / `Depth(DepthType)` |
 | 4 CharacterMotion | `ChangeMotion{character, motion?, facial?}` | `LayoutData.Type = 0`；与 2 共用数组，**按 Type 分流**（`data-model.md`） |
 | 6 SpecialEffect | `Effect(Effect)` | 见 §3.3 |
 | 7 Sound | `Sound(SoundOp)` | 按 `PlayMode` 分成 `Bgm{…}` / `SeOneShot` / `SeLoop{key,…}` / `Stop{…}` / `BgmVolume` / `BgmAisacVolume` / `BgmBlock` |

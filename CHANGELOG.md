@@ -8,6 +8,22 @@ together with its fidelity impact.
 
 ## [Unreleased]
 
+### 修复 / Fixed（2026-09-24，对标原生录制的节奏校准）
+- 用 PlayCover 原生录制（第一话，442 s）的 65 个语音间隔校准 `sse-timeline`：平均误差 0.663 s → 0.051 s，
+  最大 3.15 s → 0.14 s（按录制时游戏的实际帧率 54.5 fps 模拟；方法与逆向依据见
+  `docs/reverse/notes/2026-09-24-native-capture-pacing.md`）
+- 自动翻页等待所有在场角色的一次性身体动作播完（`CheckAutoModeTalkNext`）；无语音台词不经过该闸门
+- FullScreenText：黑边开场（1.0 s + 0.5 s）、按 TMP `characterInfo` 数组逐槽渐显（0.125 s/槽）、语音后停留 1.0 s、末条淡出 1.0 s；
+  语音改在 `text_start` 播放
+- Sekai 转场完成 = 白色 `ColorFader` 延迟（In 0.25 s / Out 0.5 s）+ Duration，并补画白色淡变（粒子仍未画）
+- 退场前置等待 0.15 s（滑出式为移动时长 − 0.1 s），出场/退场淡变多 1 帧（`WaitForSeconds(0)`）
+- 每帧先恢复 `PlayCore` 再恢复片段协程（Unity 延迟调用队列顺序）
+- IR v2：`LayoutOp::Hide { delay }`
+- 新增 `sse timeline --sim-fps <f>`（仅用于对标降帧录像）
+- **像素影响**：整集时长与各句出现时刻改变（第一话 397.95 s → 438.43 s，原生录制 442.3 s 含录制前后余量）；Sekai 转场出现白屏淡入淡出；退场晚 0.15 s 开始淡出
+- Pacing calibrated against a native capture: mean interval error 0.663 s → 0.051 s.
+
+
 ### 新增 / Added（2026-09-24，第一话导出）
 - 完整链路：`sse-assets`（读 Ripper 输出）→ `sse-scenario`（剧本 → IR v1）→ `sse-timeline`（60 fps 逐帧复刻协程调度）
   → `sse-bake`（Unity 语义动作/表情线性混合、眨眼事件、口型、呼吸、物理 → 参数表）→ `sse-render`（wgpu：背景 cover、

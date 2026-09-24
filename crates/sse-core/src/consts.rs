@@ -45,6 +45,15 @@ pub const PLAYER_NAME_PLACEHOLDER: &str = "{{playerName}}";
 pub const MOVE_DURATION_NORMAL: f32 = 0.5;
 pub const MOVE_DURATION_FAST: f32 = 0.33;
 pub const MOVE_DURATION_SLOW: f32 = 0.75;
+/// SekaiIn (20 / 40): `ColorFader.Set(white)` then fades to transparent after this delay.
+pub const SEKAI_IN_FADE_DELAY: f32 = 0.25;
+/// SekaiOut (21 / 41): fades to opaque white after this delay (with the particle prefab).
+pub const SEKAI_OUT_FADE_DELAY: f32 = 0.5;
+/// Delay before a hide fade when the character stays in place (`0x3E19999A`,
+/// `SnippetActionCharacterLayout` 0x16DB774).
+pub const HIDE_DELAY_IN_PLACE: f32 = 0.15;
+/// Added to the move duration for a sliding hide (`0xBDCCCCCD` = -0.1, 0x16DB838).
+pub const HIDE_SLIDE_FADE_OFFSET: f32 = -0.1;
 /// `layout.character_fade_duration`.
 pub const CHARACTER_FADE_DURATION: f32 = 0.1;
 /// `layout.yaml` `transform_map`: side X for DefaultMode / ThreeMode.
@@ -64,6 +73,22 @@ pub const AUTO_NEXT_PAGE_DELAY: f32 = 2.0;
 pub const AUTO_WAIT_AFTER_VOICE: f32 = 0.5;
 /// `talk.auto_voice_timeout`.
 pub const AUTO_VOICE_TIMEOUT: f32 = 30.0;
+
+/// `ScenarioFullScreenTextDialog.playDuration` (static, `.cctor` 0x169DB80): cinemascope
+/// tween, hold after the voice, and `FadeOutAll` duration.
+pub const FST_PLAY_DURATION: f32 = 1.0;
+/// `ScenarioFullScreenTextDialog.cinemascopeHeight` (static): bar height in reference pixels.
+pub const FST_CINEMASCOPE_HEIGHT: f32 = 240.0;
+/// `baseCinemascope` alpha while the bars are shown (`PlayCinemascope` 0x169DC00).
+pub const FST_BASE_ALPHA: f32 = 0.5;
+/// `UniTask.Delay(0.5 s)` after the bars on `ViewType.First` (`PlayCore` 0x169E140).
+pub const FST_OPEN_DELAY: f32 = 0.5;
+/// `TextAppearFade.textWait` (prefab `resources.assets|572433`): per-slot fade-in time.
+pub const FST_TEXT_WAIT: f32 = 0.125;
+/// Voice wait cap in `PlayCore` (`t >= 10`).
+pub const FST_VOICE_TIMEOUT: f32 = 10.0;
+/// `new TMP_TextInfo()` allocates `characterInfo[8]`.
+pub const TMP_CHARACTER_INFO_INITIAL: u32 = 8;
 /// `talk.window_fade_duration`.
 pub const TALK_WINDOW_FADE_DURATION: f32 = 0.15;
 /// `talk.line_advance_px`.
@@ -173,6 +198,16 @@ mod tests {
         check("sound.default_bgm_fade", DEFAULT_BGM_FADE);
         check("telop.auto_hold", TELOP_AUTO_HOLD);
         check("telop.anim_clip_length", TELOP_ANIM_CLIP_LENGTH);
+        check("fst.play_duration", FST_PLAY_DURATION);
+        check("fst.cinemascope_height", FST_CINEMASCOPE_HEIGHT);
+        check("fst.base_alpha", FST_BASE_ALPHA);
+        check("fst.open_delay", FST_OPEN_DELAY);
+        check("fst.text_wait", FST_TEXT_WAIT);
+        check("fst.voice_timeout", FST_VOICE_TIMEOUT);
+        check("layout.hide_delay_in_place", HIDE_DELAY_IN_PLACE);
+        check("layout.hide_slide_fade_offset", HIDE_SLIDE_FADE_OFFSET);
+        check("sekai.in_fade_delay", SEKAI_IN_FADE_DELAY);
+        check("sekai.out_fade_delay", SEKAI_OUT_FADE_DELAY);
         check("sekai_transition.lifetime", SEKAI_TRANSITION_LIFETIME);
         check("live2d.body_motion_fade", BODY_MOTION_FADE);
         check("live2d.facial_fade", FACIAL_FADE);

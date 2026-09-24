@@ -349,7 +349,8 @@ impl<'a> Baker<'a> {
         c.opacity = Tween {
             from: 0.0,
             to: 1.0,
-            start: frame,
+            // FadeOpacityCoroutine starts with WaitForSeconds(0): one frame at opacity 0
+            start: if fade { frame + 1 } else { frame },
             frames: if fade {
                 self.tb.frames_for(consts::CHARACTER_FADE_DURATION)
             } else {
@@ -614,12 +615,14 @@ impl<'a> Baker<'a> {
                         c.y = y;
                     }
                 }
-                LayoutOp::Hide => {
+                LayoutOp::Hide { delay } => {
+                    // FadeOpacityCoroutine: WaitForSeconds(delay) (>= 1 frame), then the fade
+                    let start = f + self.tb.frames_for(*delay).max(1);
                     let frames = self.tb.frames_for(consts::CHARACTER_FADE_DURATION);
                     if let Some(c) = self.chars.get_mut(&l.character) {
                         let cur = c.opacity.at(f);
-                        c.opacity = Tween { from: cur, to: 0.0, start: f, frames, ease_out_quad: false };
-                        c.hide_at = Some(f + frames);
+                        c.opacity = Tween { from: cur, to: 0.0, start, frames, ease_out_quad: false };
+                        c.hide_at = Some(start + frames);
                     }
                 }
                 LayoutOp::Shake { .. } => note(&mut self.notes, "character shake not rendered"),
@@ -730,10 +733,11 @@ impl<'a> Baker<'a> {
             EffectOp::FullScreenText { text, voice, .. } => {
                 self.hide_talk_window(f);
                 let fade = self.tb.frames_for(consts::SCENARIO_FADE_TIME);
-                self.full_text.push(Banner { text: text.clone(), start: f, end: timing.finish, fade });
+                let text_start = timing.full_screen_text.as_ref().map_or(f, |t| t.text_start);
+                self.full_text.push(Banner { text: text.clone(), start: text_start, end: timing.finish, fade });
                 if let Some(a) = voice {
                     let a = a.clone();
-                    self.one_shot(&a, f, 1.0, AudioKind::Voice);
+                    self.one_shot(&a, text_start, 1.0, AudioKind::Voice);
                 }
                 note(&mut self.notes, "FullScreenText layout approximated (centred white text)");
             }
@@ -767,8 +771,18 @@ impl<'a> Baker<'a> {
                     AmbientColor::Night => consts::MODEL_COLOR_NIGHT,
                 };
             }
-            EffectOp::SekaiTransition { .. } => {
-                note(&mut self.notes, "Sekai transition particles not rendered (timing approximated)");
+            EffectOp::SekaiTransition { dir, .. } => {
+                let (delay, from, to) = match dir {
+                    Direction::In => (consts::SEKAI_IN_FADE_DELAY, [1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 0.0]),
+                    Direction::Out => (consts::SEKAI_OUT_FADE_DELAY, self.fader, [1.0, 1.0, 1.0, 1.0]),
+                };
+                if *dir == Direction::In {
+                    self.fader = from;
+                    self.fader_tween = None;
+                }
+                let start = f + self.tb.frames_for(delay);
+                self.fade_color(to, Some(if *dir == Direction::Out && from[3] == 0.0 { [1.0, 1.0, 1.0, 0.0] } else { from }), start, d);
+                note(&mut self.notes, "Sekai transition particles (fx_transition_scenario) not rendered; white ColorFader only");
             }
             EffectOp::Noop => {}
             other => note(&mut self.notes, &format!("effect not rendered: {other:?}")),

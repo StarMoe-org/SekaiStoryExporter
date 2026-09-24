@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub const IR_VERSION: u32 = 1;
+pub const IR_VERSION: u32 = 2;
 
 pub type CharacterId = i32;
 
@@ -286,7 +286,12 @@ pub enum LayoutOp {
         facial: Option<String>,
         depth: DepthType,
     },
-    Hide,
+    /// `HideCharacter(id, delay)`: the 0.1 s fade starts after `delay` seconds
+    /// (`SnippetActionCharacterLayout` 0x16DB6F4). In place (`SideFrom == SideTo`) the delay is
+    /// 0.15 s; otherwise it is the move duration minus 0.1 s.
+    Hide {
+        delay: f32,
+    },
     Shake {
         axis: Axis,
         raw: serde_json::Value,

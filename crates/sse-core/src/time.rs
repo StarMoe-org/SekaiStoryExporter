@@ -32,6 +32,14 @@ impl TimeBase {
         }
     }
 
+    /// A time base whose `Time.deltaTime` differs from `1 / fps`. Only for checking the
+    /// pacing model against a capture of a game that ran below its target frame rate
+    /// (`sse timeline --sim-fps`); exports always use [`TimeBase::story`].
+    pub fn with_delta(fps: u32, delta: f32) -> Self {
+        assert!(fps > 0 && delta > 0.0, "fps and delta must be positive");
+        Self { fps, delta }
+    }
+
     pub fn fps(self) -> u32 {
         self.fps
     }
