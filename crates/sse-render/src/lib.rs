@@ -207,6 +207,19 @@ impl Renderer {
             });
         }
 
+        // ShakeScreen moves `ScenarioRoot` (background, characters) in canvas pixels, +y up
+        let [sx, sy] = frame.scenario_shake;
+        if sx != 0.0 || sy != 0.0 {
+            let (ox, oy) = (sx * k, -sy * k);
+            for q in &mut plan.scene {
+                q.translate(ox, oy);
+            }
+            for c in &mut plan.characters {
+                c.rect[0] += ox;
+                c.rect[1] += oy;
+            }
+        }
+
         // EffectLayer: `fx_transition_scenario`, re-simulated from its instantiation
         if let (Some(fx), Some(atlas)) = (&frame.fx, &self.fx_atlas) {
             let mut sim = fx::TransitionFx::new(fx.seed);
@@ -252,7 +265,13 @@ impl Renderer {
         }
         if let Some(t) = &frame.talk {
             if self.native.has_window() {
+                let first = plan.ui.len();
                 self.native.talk(&mut plan.ui, k, t.window_alpha, t.auto_time);
+                // ShakeWindow moves `windowRectTransform` (the window, name and words)
+                let [wx, wy] = frame.window_shake;
+                for q in &mut plan.ui[first..] {
+                    q.translate(wx * k, -wy * k);
+                }
             } else if let Some(img) = &self.dialog_overlay {
                 plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0, 1.0, 1.0, t.window_alpha]));
             }
@@ -274,7 +293,10 @@ impl Renderer {
     fn text_canvas(&mut self, frame: &FrameState, k: f32, telop: Option<(f32, f32)>) -> Result<gpu::ImageId, RenderError> {
         let key = format!(
             "{:?}|{:?}|{:?}|{:?}|{}",
-            frame.talk.as_ref().map(|t| (&t.name, &t.body, t.visible, (t.window_alpha * 255.0) as u8)),
+            frame.talk.as_ref().map(|t| {
+                let s = frame.window_shake;
+                (&t.name, &t.body, t.visible, (t.window_alpha * 255.0) as u8, (s[0] * 4.0) as i32, (s[1] * 4.0) as i32)
+            }),
             frame.telop.as_ref().map(|b| (&b.text, telop.map(|(x, a)| ((x * 4.0) as i32, (a * 255.0) as u8)))),
             frame.place_info.as_ref().map(|b| (&b.text, (b.x * 4.0) as i32)),
             frame.full_screen_text.as_ref().map(|b| (&b.text, (b.progress * 64.0) as u32, (b.alpha * 255.0) as u8)),
@@ -320,8 +342,10 @@ impl Renderer {
         let rect = |r: [f32; 4], align: f32, valign: f32| frame_at(r[0], r[1], r[2], r[3], align, valign);
         if let Some(t) = &frame.talk {
             use native_ui::layout as l;
-            sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, rect(l::NAME, 0.0, 0.0), &name, t.window_alpha);
-            sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, rect(l::WORDS, 0.0, 0.0), &body, t.window_alpha);
+            let [wx, wy] = frame.window_shake;
+            let shaken = |r: [f32; 4]| [r[0] + wx, r[1] - wy, r[2], r[3]];
+            sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, rect(shaken(l::NAME), 0.0, 0.0), &name, t.window_alpha);
+            sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, rect(shaken(l::WORDS), 0.0, 0.0), &body, t.window_alpha);
             if self.native.has_window() {
                 // `AutoSignalText`: 32, white, centre / middle, characterSpacing −4, no outline
                 let auto = sse_text::Style {

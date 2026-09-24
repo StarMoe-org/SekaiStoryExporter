@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PARAM_TABLE_VERSION: u32 = 3;
+pub const PARAM_TABLE_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamTable {
@@ -48,6 +48,12 @@ pub struct FrameState {
     pub movie: Option<MovieState>,
     /// `fx_transition_scenario` instance (`SnippetActionSpecialEffect` cases 21 / 41).
     pub fx: Option<FxState>,
+    /// ShakeScreen offset of `ScenarioRoot`, reference-canvas pixels, +y up.
+    #[serde(default)]
+    pub scenario_shake: [f32; 2],
+    /// ShakeWindow offset of the talk window, reference-canvas pixels, +y up.
+    #[serde(default)]
+    pub window_shake: [f32; 2],
 }
 
 /// One live `fx_transition_scenario` copy. The prefab hangs off `ScenarioPlayer.effectLayer`

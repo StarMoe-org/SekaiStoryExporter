@@ -40,6 +40,11 @@ pub struct QuadDraw {
 }
 
 impl QuadDraw {
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        self.rect[0] += dx;
+        self.rect[1] += dy;
+    }
+
     pub fn image(id: ImageId, rect: [f32; 4], color: [f32; 4]) -> Self {
         Self { image: Some(id), rect, color, premultiplied: false }
     }

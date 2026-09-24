@@ -11,6 +11,7 @@
 
 mod character;
 mod lipsync;
+mod shake;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -211,6 +212,9 @@ struct Baker<'a> {
     movie: Option<(String, Option<String>, u32, u32)>,
     /// `fx_transition_scenario`: (first frame, frames until `DestroyAtTime`).
     fx: Option<(u32, u32)>,
+    /// `screenShakeTweener` on `scenarioRoot` / `TalkWindow.ShakeWindow` on `windowRectTransform`.
+    screen_shake: Option<shake::Shake>,
+    window_shake: Option<shake::Shake>,
     audio: Vec<AudioCue>,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
@@ -260,6 +264,8 @@ impl<'a> Baker<'a> {
             auto_since: None,
             movie: None,
             fx: None,
+            screen_shake: None,
+            window_shake: None,
             audio: Vec::new(),
             bgm: None,
             se_loops: BTreeMap::new(),
@@ -887,6 +893,23 @@ impl<'a> Baker<'a> {
                 }
                 note(&mut self.notes, "Sekai transition particles: fx_transition_scenario simulated from the prefab modules (noise approximated)");
             }
+            // `SnippetActionSpecialEffect` case 5: `scenarioRoot.DOShakePosition(Duration, 10, 16,
+            // 90, false, true)`; `Duration == INFINITY_DURATION` goes to `ScreenShakeInfinity`
+            // (3600 s, no fade-out) until StopShakeScreen kills it.
+            EffectOp::ShakeScreen => {
+                let fade = d != consts::INFINITY_DURATION;
+                let fps = self.tb.fps() as f32;
+                self.screen_shake = Some(shake::Shake::new(&mut self.rng, f, fps, d, 10.0, 16, 90.0, false, fade));
+            }
+            // case 6: `TalkWindow.ShakeWindow` = `windowRectTransform.DOShakeAnchorPos(Duration,
+            // 10, 16, 90, false, true)`
+            EffectOp::ShakeWindow => {
+                let fps = self.tb.fps() as f32;
+                self.window_shake = Some(shake::Shake::new(&mut self.rng, f, fps, d, 10.0, 16, 90.0, true, true));
+            }
+            // cases 25 / 26: kill the tween; `OnFinishShake*` puts the base position back
+            EffectOp::StopShakeScreen => self.screen_shake = None,
+            EffectOp::StopShakeWindow => self.window_shake = None,
             EffectOp::Noop => {}
             other => note(&mut self.notes, &format!("effect not rendered: {other:?}")),
         }
@@ -980,6 +1003,8 @@ impl<'a> Baker<'a> {
                 (f >= start && f < start + frames)
                     .then_some(sse_params::FxState { age_frames: f - start, seed: start.wrapping_mul(2654435761) })
             }),
+            scenario_shake: self.screen_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
+            window_shake: self.window_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
         }
     }
 }
