@@ -42,8 +42,32 @@ pub mod layout {
     /// `MenuIcon`: 52×12, centred.
     pub const MENU_ICON: [f32; 4] = [1830.0, 58.0, 52.0, 12.0];
     pub const MENU_ICON_COLOR: [f32; 4] = [0.266_666_68, 0.266_666_68, 0.4, 1.0];
+    /// `bg_base_wh` colour of the telop band and the place-info panel.
+    pub const BAND_COLOR: [f32; 4] = [0.266_666_68, 0.266_666_68, 0.4, 0.8];
+    /// `ScenarioTelop/.../Text`: 1040×120 centred, 44, centre / middle.
+    pub const TELOP_TEXT: [f32; 4] = [440.0, 480.0, 1040.0, 120.0];
+    /// `PlaceInfo/Content/CustomText`: 520×40 at the panel centre + (10, 0), 40, left / middle.
+    pub const PLACE_TEXT: [f32; 4] = [40.0, 43.0, 520.0, 40.0];
     /// `ScenarioFullScreenTextDialog/Content/Text`: stretched, size (−280, −480), pos (140, 0).
     pub const FST_TEXT: [f32; 4] = [280.0, 240.0, 1640.0, 600.0];
+}
+
+/// `ac_scenario_telop_v2_01` / `_02` (`resources.assets|1974` / `|1975`), decoded from the
+/// clips' streamed curves (`story/scripts/45_clipdecode.py`) and sampled every 1/60 s.
+pub mod telop_clip {
+    pub const SHOW_BASE_SCALE_X: [f32; 21] = [0.0, 0.12296, 0.25391, 0.37795, 0.48991, 0.58842, 0.67495, 0.74949, 0.8125, 0.86549, 0.90873, 0.94274, 0.9685, 0.98631, 0.99662, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    pub const SHOW_BASE_ALPHA: [f32; 21] = [0.0, 0.01372, 0.05516, 0.1241, 0.21668, 0.32518, 0.4419, 0.55721, 0.66336, 0.75705, 0.83532, 0.89725, 0.94396, 0.97589, 0.99411, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    pub const SHOW_TEXT_ALPHA: [f32; 21] = [0.0, 0.0, 0.0, 0.0, 0.01159, 0.05211, 0.1365, 0.29176, 0.54934, 0.80819, 0.90005, 0.92208, 0.94093, 0.95669, 0.96952, 0.97981, 0.98771, 0.99342, 0.99723, 0.99935, 1.0];
+    pub const SHOW_TEXT_X: [f32; 21] = [-30.0, -30.0, -30.0, -30.0, -29.69962, -28.85422, -27.52697, -25.79509, -23.74549, -21.42683, -18.92424, -16.32728, -13.678, -11.0655, -8.57801, -6.25891, -4.19729, -2.47611, -1.14798, -0.29804, 0.0];
+    /// Base and text alpha share this curve.
+    pub const HIDE_ALPHA: [f32; 21] = [1.0, 0.99797, 0.99153, 0.97992, 0.96224, 0.93757, 0.90421, 0.86046, 0.8045, 0.73316, 0.6446, 0.53982, 0.42369, 0.30985, 0.21207, 0.1352, 0.07928, 0.04113, 0.01686, 0.00391, 0.00001];
+
+    pub fn sample(table: &[f32; 21], t: f32) -> f32 {
+        let x = (t * 60.0).clamp(0.0, 20.0);
+        let i = (x.floor() as usize).min(19);
+        let w = x - i as f32;
+        table[i] * (1.0 - w) + table[i + 1] * w
+    }
 }
 
 pub struct NativeUi {
@@ -53,6 +77,8 @@ pub struct NativeUi {
     auto_icon: Option<gpu::Image>,
     menu: Option<gpu::Image>,
     menu_icon: Option<gpu::Image>,
+    /// White 256×1 ramps for `GradientAlpha` edges: alpha 0 → 1 and 1 → 0.
+    ramp: [gpu::Image; 2],
     pub missing: Vec<&'static str>,
 }
 
@@ -77,7 +103,14 @@ impl NativeUi {
             .map(|i| gpu.image(&image::imageops::rotate90(&i)));
         let menu = load(dir, "btn_circle_h80_wh", &mut missing).map(|i| gpu.image(&i));
         let menu_icon = load(dir, "icon_menu_story_wh", &mut missing).map(|i| gpu.image(&i));
-        Self { window, name_bar, auto_bg, auto_icon, menu, menu_icon, missing }
+        let ramp = |up: bool| {
+            RgbaImage::from_fn(256, 1, |x, _| {
+                let a = if up { x } else { 255 - x } as u8;
+                image::Rgba([255, 255, 255, a])
+            })
+        };
+        let ramp = [gpu.image(&ramp(true)), gpu.image(&ramp(false))];
+        Self { window, name_bar, auto_bg, auto_icon, menu, menu_icon, ramp, missing }
     }
 
     pub fn has_window(&self) -> bool {
@@ -114,6 +147,46 @@ impl NativeUi {
             let c = layout::MENU_ICON_COLOR;
             out.push(QuadDraw::image(i.id, r(layout::MENU_ICON), [c[0], c[1], c[2], c[3] * alpha]));
         }
+    }
+}
+
+/// Three-piece band of `bg_base_wh` (a plain white image) in `color`: a left ramp
+/// (`GradientAlpha` left 0 → right 1), a solid middle and a right ramp.
+fn band(ramps: &[gpu::Image; 2], out: &mut Vec<QuadDraw>, k: f32, x: [f32; 4], y: f32, h: f32, color: [f32; 4]) {
+    let r = |x0: f32, x1: f32| [x0 * k, y * k, (x1 - x0) * k, h * k];
+    out.push(QuadDraw::image(ramps[0].id, r(x[0], x[1]), color));
+    out.push(QuadDraw::solid(r(x[1], x[2]), color));
+    out.push(QuadDraw::image(ramps[1].id, r(x[2], x[3]), color));
+}
+
+impl NativeUi {
+    /// `ScenarioTelop` (`resources.assets|44707`): 1040×120 centred; `Content/Base` pieces
+    /// 260 / 520 / 260 scaled in x about pivot x = 0.02. Returns the text's (x offset, alpha).
+    pub fn telop(&self, out: &mut Vec<QuadDraw>, k: f32, show: f32, hide: Option<f32>) -> (f32, f32) {
+        use telop_clip::*;
+        let (scale, base_a, text_a, text_x) = match hide {
+            Some(t) => (1.0, sample(&HIDE_ALPHA, t), sample(&HIDE_ALPHA, t), 0.0),
+            None => (
+                sample(&SHOW_BASE_SCALE_X, show),
+                sample(&SHOW_BASE_ALPHA, show),
+                sample(&SHOW_TEXT_ALPHA, show),
+                sample(&SHOW_TEXT_X, show),
+            ),
+        };
+        let (left, width) = (440.0, 1040.0);
+        let pivot = left + 0.02 * width;
+        let sx = |x: f32| pivot + (x - pivot) * scale;
+        let c = layout::BAND_COLOR;
+        if scale > 0.0 && base_a > 0.0 {
+            band(&self.ramp, out, k, [sx(440.0), sx(700.0), sx(1220.0), sx(1480.0)], 480.0, 120.0, [c[0], c[1], c[2], c[3] * base_a]);
+        }
+        (text_x, text_a)
+    }
+
+    /// `PlaceInfo` (`ScreenLayerScenario/UILayer/TopLeft2`): 580×64 at (x, 31); `Bg (3)` ramp
+    /// 152 left of it, `Bg (4)` ramp 152 right of it.
+    pub fn place_info(&self, out: &mut Vec<QuadDraw>, k: f32, x: f32) {
+        band(&self.ramp, out, k, [x - 152.0, x, x + 580.0, x + 732.0], 31.0, 64.0, layout::BAND_COLOR);
     }
 }
 

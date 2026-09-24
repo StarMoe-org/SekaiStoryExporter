@@ -92,8 +92,6 @@ impl OutputArgs {
         };
         sse_render::UiAssets {
             dialog: opt("Dialogue_Background.png"),
-            telop: opt("SceneText_Background.png"),
-            place_info: opt("SceneText_TopLeft.png"),
             font_body: self.ui.join("SourceHanSansSC-Medium.otf"),
             font_name: self.ui.join("SourceHanSansSC-Bold.otf"),
             sprites: self.ui.clone(),

@@ -62,6 +62,11 @@ pub const BLUR_MAX_SPREAD: f32 = 3.0;
 /// `ScenarioPlayer.movieResolution` (`.ctor` 0x16B9B04, literal 0x529D340): size of the
 /// centred movie `RawImage`.
 pub const MOVIE_RESOLUTION: [f32; 2] = [2338.0, 1080.0];
+/// `ScreenSlideInOut.<Play>d__7` (0x16EB2B4): `DOAnchorPos(to, 0.2)` + `SetEase(OutQuart)`.
+pub const PLACE_INFO_SLIDE_DURATION: f32 = 0.2;
+/// `ScenarioPlaceInfo.DefaultPosX = −(rt.position.x + rect.width)`; the panel is 580 wide and
+/// its world x is taken as 0 (the root canvas' world mapping is not reversed).
+pub const PLACE_INFO_HIDDEN_X: f32 = -580.0;
 /// SekaiIn (20 / 40): `ColorFader.Set(white)` then fades to transparent after this delay.
 pub const SEKAI_IN_FADE_DELAY: f32 = 0.25;
 /// SekaiOut (21 / 41): fades to opaque white after this delay (with the particle prefab).

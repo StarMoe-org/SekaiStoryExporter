@@ -15,6 +15,8 @@ together with its fidelity impact.
 - 全屏文字：黑边与 50% 底板、逐字渐显、56 号左对齐、Underlay 阴影
 - 相机模糊按 `RenderBlur` 实现（点采样 1/2 降采样、3 轮、半分辨率纹素偏移）；屏幕上的模糊大小随渲染分辨率变化
 - 字号按 em 换算（此前 `ab_glyph` 行高口径导致字小约 30%）；正文自动字号从 44 起算
+- Telop 条与地点栏按 prefab 与动画 clip 重建（不再依赖第三方叠层）：Telop 展开/淡出曲线取自 `ac_scenario_telop_v2_*`，
+  地点栏 0.2 s OutQuart 滑入，下一句台词结束时滑出
 - 片尾影片按 ffmpeg 解码 `.m2v`，拉伸进居中的 2338×1080 `movieResolution` 矩形（此前是占位文字）
 - 参数表 v2：`FullScreenTextState`、`cinemascope`、`menu_alpha`、`TalkState.auto_time`、`MovieState`
 - **像素影响**：全片 UI、文字大小、角色位置、模糊强度均改变

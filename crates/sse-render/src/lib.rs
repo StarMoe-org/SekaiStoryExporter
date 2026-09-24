@@ -48,10 +48,6 @@ pub enum RenderError {
 pub struct UiAssets {
     /// Full-screen 1920×1080 overlay of the dialog window.
     pub dialog: Option<PathBuf>,
-    /// Full-screen overlay of the telop band.
-    pub telop: Option<PathBuf>,
-    /// Full-screen overlay of the place-info band.
-    pub place_info: Option<PathBuf>,
     pub font_body: PathBuf,
     pub font_name: PathBuf,
     /// Directory holding the game's UI sprites under their sprite names (`native_ui`).
@@ -89,7 +85,7 @@ pub struct Renderer {
     models: Vec<gpu::GpuModel>,
     images: BTreeMap<String, gpu::Image>,
     ui: UiAssets,
-    ui_images: [Option<gpu::Image>; 3],
+    dialog_overlay: Option<gpu::Image>,
     native: native_ui::NativeUi,
     movie: movie::MovieDecoder,
     movie_image: gpu::Image,
@@ -119,11 +115,7 @@ impl Renderer {
                 None => Ok(None),
             }
         };
-        let ui_images = [
-            load_ui(&mut gpu, &ui.dialog)?,
-            load_ui(&mut gpu, &ui.telop)?,
-            load_ui(&mut gpu, &ui.place_info)?,
-        ];
+        let dialog_overlay = load_ui(&mut gpu, &ui.dialog)?;
         let native = native_ui::NativeUi::load(&mut gpu, &ui.sprites);
         let movie_image = gpu.image(&image::RgbaImage::new(cfg.width, cfg.height));
         let font = |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
@@ -135,7 +127,7 @@ impl Renderer {
             models,
             images: BTreeMap::new(),
             ui,
-            ui_images,
+            dialog_overlay,
             native,
             movie: movie::MovieDecoder::new("ffmpeg".into(), cfg.width, cfg.height, movie_rect(&cfg), table.fps),
             movie_image,
@@ -234,7 +226,7 @@ impl Renderer {
         if let Some(t) = &frame.talk {
             if self.native.has_window() {
                 self.native.talk(&mut plan.ui, k, t.window_alpha, t.auto_time);
-            } else if let Some(img) = &self.ui_images[0] {
+            } else if let Some(img) = &self.dialog_overlay {
                 plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0, 1.0, 1.0, t.window_alpha]));
             }
         }
@@ -242,26 +234,22 @@ impl Renderer {
             self.native.menu(&mut plan.ui, k, frame.menu_alpha);
         }
         native_ui::cinemascope(&mut plan.ui_top, k, w, h, frame.cinemascope);
-        if let Some(b) = &frame.telop
-            && let Some(img) = &self.ui_images[1] {
-                plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0, 1.0, 1.0, b.alpha]));
-            }
-        if frame.place_info.is_some()
-            && let Some(img) = &self.ui_images[2] {
-                plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0; 4]));
-            }
-        plan.text = Some(self.text_canvas(frame, k)?);
+        let telop_text = frame.telop.as_ref().map(|t| self.native.telop(&mut plan.ui, k, t.show, t.hide));
+        if let Some(p) = &frame.place_info {
+            self.native.place_info(&mut plan.ui, k, p.x);
+        }
+        plan.text = Some(self.text_canvas(frame, k, telop_text)?);
 
         Ok(self.gpu.render(&mut self.models, &plan)?)
     }
 
     /// Rasterises all text of the frame; re-uploads only when it changed.
-    fn text_canvas(&mut self, frame: &FrameState, k: f32) -> Result<gpu::ImageId, RenderError> {
+    fn text_canvas(&mut self, frame: &FrameState, k: f32, telop: Option<(f32, f32)>) -> Result<gpu::ImageId, RenderError> {
         let key = format!(
             "{:?}|{:?}|{:?}|{:?}|{}",
             frame.talk.as_ref().map(|t| (&t.name, &t.body, t.visible, (t.window_alpha * 255.0) as u8)),
-            frame.telop.as_ref().map(|b| (&b.text, (b.alpha * 255.0) as u8)),
-            frame.place_info.as_ref().map(|b| &b.text),
+            frame.telop.as_ref().map(|b| (&b.text, telop.map(|(x, a)| ((x * 4.0) as i32, (a * 255.0) as u8)))),
+            frame.place_info.as_ref().map(|b| (&b.text, (b.x * 4.0) as i32)),
             frame.full_screen_text.as_ref().map(|b| (&b.text, (b.progress * 64.0) as u32, (b.alpha * 255.0) as u8)),
             frame.movie.as_ref().map_or("", |m| if m.file.is_some() { "" } else { m.name.as_str() })
         );
@@ -312,11 +300,14 @@ impl Renderer {
                 sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect([x - 20.0, y, w + 40.0, h], 0.5, 0.5), &auto, t.window_alpha);
             }
         }
-        if let Some(b) = &frame.telop {
-            sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, frame_at(0.0, 480.0, 1920.0, 120.0, 0.5, 0.5), &banner, b.alpha);
+        let plain = sse_text::Style { auto_size: false, outline: None, ..body };
+        if let (Some(b), Some((x, a))) = (&frame.telop, telop) {
+            let [l, t, w, h] = native_ui::layout::TELOP_TEXT;
+            sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, rect([l + x, t, w, h], 0.5, 0.5), &plain, a);
         }
-        if let Some(b) = &frame.place_info {
-            sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, frame_at(40.0, 31.0, 800.0, 63.0, 0.0, 0.5), &sse_text::Style { size: 36.0, ..banner }, b.alpha);
+        if let Some(p) = &frame.place_info {
+            let [l, t, w, h] = native_ui::layout::PLACE_TEXT;
+            sse_text::draw(&mut canvas, &self.body_font, &p.text, u32::MAX, rect([l + p.x, t, w, h], 0.0, 0.5), &sse_text::Style { size: 40.0, ..plain }, 1.0);
         }
         if let Some(b) = &frame.full_screen_text {
             // `ScenarioFullScreenTextDialog/Text` (`resources.assets|576995`): 56, left,
@@ -358,7 +349,7 @@ impl Renderer {
         vec![
             "masks rendered per drawable at RT resolution (game: shared 1024² × 4 atlas)".into(),
             "text rasterised from Source Han Sans (not TMP SDF); boxes, sizes and underlay from the prefabs, TMP line breaking approximated".into(),
-            "talk window, name bar, auto signal and menu button rebuilt from the prefabs (sprites user-supplied); telop / place-info from third-party overlays".into(),
+            "scenario UI rebuilt from the prefabs (talk-window sprites user-supplied)".into(),
         ]
     }
 

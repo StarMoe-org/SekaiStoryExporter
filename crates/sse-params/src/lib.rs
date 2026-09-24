@@ -36,8 +36,8 @@ pub struct FrameState {
     /// Monotone post effect (`influence`, `tone`, `mono`) when attached.
     pub camera_color: Option<CameraColor>,
     pub talk: Option<TalkState>,
-    pub telop: Option<BannerState>,
-    pub place_info: Option<BannerState>,
+    pub telop: Option<TelopState>,
+    pub place_info: Option<PlaceInfoState>,
     pub full_screen_text: Option<FullScreenTextState>,
     /// `ScenarioFullScreenTextDialog` cinemascope: bar height and `Base` alpha, as the
     /// eased fraction of the shown state (0 = hidden).
@@ -90,6 +90,21 @@ pub struct TalkState {
     /// Seconds since the auto signal was enabled (first talk of the episode); drives the
     /// `TweenAlpha` blink of its icon.
     pub auto_time: f32,
+}
+
+/// `ScenarioTelopPlayer`: seconds into the show clip, and into the hide clip once it runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelopState {
+    pub text: String,
+    pub show: f32,
+    pub hide: Option<f32>,
+}
+
+/// `ScenarioPlaceInfo`: `anchoredPosition.x` of the panel (reference pixels).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaceInfoState {
+    pub text: String,
+    pub x: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -72,32 +72,70 @@ impl Tween {
     }
 }
 
-struct Banner {
-    text: String,
-    start: u32,
-    end: u32,
-    fade: u32,
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PlaceStatus {
+    SlideIn,
+    Active,
+    SlideOut,
 }
 
-impl Banner {
-    fn state(&self, f: u32) -> Option<BannerState> {
-        if f < self.start || f >= self.end {
-            return None;
+/// `ScenarioPlaceInfo` (`ScreenSlideInOut`: `DOAnchorPos(to, 0.2)` with `Ease.OutQuart`).
+struct PlaceInfoRt {
+    text: String,
+    from: f32,
+    to: f32,
+    start: u32,
+    status: PlaceStatus,
+    reserve_close: bool,
+}
+
+impl PlaceInfoRt {
+    fn frames(tb: TimeBase) -> u32 {
+        tb.frames_for(consts::PLACE_INFO_SLIDE_DURATION).max(1)
+    }
+
+    fn x_at(&self, f: u32, tb: TimeBase) -> f32 {
+        let t = (f.saturating_sub(self.start) as f32 / Self::frames(tb) as f32).min(1.0);
+        let e = 1.0 - (1.0 - t).powi(4); // OutQuart
+        self.from + (self.to - self.from) * e
+    }
+
+    /// Settles a finished slide-in (and a reserved close) before frame `f`.
+    fn advance(&mut self, f: u32, tb: TimeBase) {
+        let end = self.start + Self::frames(tb);
+        if self.status == PlaceStatus::SlideIn && f >= end {
+            self.status = PlaceStatus::Active;
+            if self.reserve_close {
+                self.reserve_close = false;
+                self.start_slide_out(end);
+            }
         }
-        let a_in = if self.fade == 0 {
-            1.0
-        } else {
-            ((f - self.start) as f32 / self.fade as f32).min(1.0)
-        };
-        let a_out = if self.fade == 0 {
-            1.0
-        } else {
-            ((self.end - f) as f32 / self.fade as f32).min(1.0)
-        };
-        Some(BannerState {
-            text: self.text.clone(),
-            alpha: a_in.min(a_out),
-        })
+    }
+
+    fn start_slide_out(&mut self, f: u32) {
+        self.from = self.to;
+        self.to = consts::PLACE_INFO_HIDDEN_X;
+        self.start = f;
+        self.status = PlaceStatus::SlideOut;
+    }
+
+    /// `ScenarioPlaceInfo.Hide`: slides out when active, reserves when still sliding in.
+    fn hide(&mut self, f: u32, tb: TimeBase) {
+        self.advance(f, tb);
+        match self.status {
+            PlaceStatus::Active => self.start_slide_out(f),
+            PlaceStatus::SlideIn => self.reserve_close = true,
+            PlaceStatus::SlideOut => {}
+        }
+    }
+
+    fn state(&mut self, f: u32, tb: TimeBase) -> Option<PlaceInfoState> {
+        self.advance(f, tb);
+        if self.status == PlaceStatus::SlideOut && f >= self.start + Self::frames(tb) {
+            return None; // `SetActive(false)` after the slide-out
+        }
+        Some(PlaceInfoState { text: self.text.clone(), x: self.x_at(f, tb) })
     }
 }
 
@@ -161,8 +199,9 @@ struct Baker<'a> {
     /// Frame the first talk window appeared (auto signal enabled).
     auto_since: Option<u32>,
     talk_window: Option<Tween>,
-    telop: Vec<Banner>,
-    place_info: Option<(String, u32)>,
+    /// (text, start, hide clip start, end)
+    telop: Vec<(String, u32, u32, u32)>,
+    place_info: Option<PlaceInfoRt>,
     full_text: Vec<FstRun>,
     /// `PlayCinemascope(show)` calls: (start frame, show).
     cinemascope: Vec<(u32, bool)>,
@@ -717,7 +756,11 @@ impl<'a> Baker<'a> {
 
     fn finish(&mut self, instr: &Instr, f: u32) {
         if let InstrKind::Talk(t) = &instr.kind {
-            self.place_info = None;
+            // `OnFinishTalkWindow`: `if (placeInfo.IsActive) placeInfo.Hide()`
+            let tb = self.tb;
+            if let Some(p) = &mut self.place_info {
+                p.hide(f, tb);
+            }
             for c in self.chars.values_mut() {
                 c.lip.end_text(f);
             }
@@ -765,12 +808,20 @@ impl<'a> Baker<'a> {
             }
             EffectOp::Telop { text } => {
                 self.hide_talk_window(f);
-                let fade = self.tb.frames_for(consts::TELOP_ANIM_CLIP_LENGTH);
-                self.telop.push(Banner { text: text.clone(), start: f, end: timing.finish, fade });
-                note(&mut self.notes, "telop show/hide animations approximated as alpha fades");
+                let clip = self.tb.frames_for(consts::TELOP_ANIM_CLIP_LENGTH);
+                self.telop.push((text.clone(), f, timing.finish.saturating_sub(clip), timing.finish));
             }
             EffectOp::PlaceInfo { text } => {
-                self.place_info = Some((text.clone(), f));
+                // `ScenarioPlaceInfo.Show`: from the current x (after `Reset`, DefaultPosX) to 0
+                let from = self.place_info.as_ref().map_or(consts::PLACE_INFO_HIDDEN_X, |p| p.x_at(f, self.tb));
+                self.place_info = Some(PlaceInfoRt {
+                    text: text.clone(),
+                    from,
+                    to: 0.0,
+                    start: f,
+                    status: PlaceStatus::SlideIn,
+                    reserve_close: false,
+                });
             }
             EffectOp::FullScreenText { text, voice, .. } => {
                 self.hide_talk_window(f);
@@ -908,8 +959,12 @@ impl<'a> Baker<'a> {
             blur: self.blur_value,
             camera_color: self.camera_color,
             talk: talk.filter(|t| t.window_alpha > 0.0),
-            telop: self.telop.iter().find_map(|b| b.state(f)),
-            place_info: self.place_info.as_ref().map(|(t, _)| BannerState { text: t.clone(), alpha: 1.0 }),
+            telop: self.telop.iter().find(|t| f >= t.1 && f < t.3).map(|(text, start, hide, _)| TelopState {
+                text: text.clone(),
+                show: (f - start) as f32 * self.tb.delta(),
+                hide: (f >= *hide).then(|| (f - hide) as f32 * self.tb.delta()),
+            }),
+            place_info: self.place_info.as_mut().and_then(|p| p.state(f, self.tb)),
             full_screen_text: self.full_text.iter().find_map(|b| b.state(f, self.tb)),
             cinemascope: self.cinemascope_at(f),
             menu_alpha: if movie.is_some() { 0.0 } else { 1.0 },
