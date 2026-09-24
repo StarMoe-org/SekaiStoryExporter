@@ -8,9 +8,19 @@
 //!   (backed by the `libm` crate, never `std` -- see `docs/conventions/determinism.md` D-4)
 //! - Deterministic helpers such as `fs::read_dir_sorted`
 //! - Time-base types: `SimFrame`, `FrameNo`, `Seconds`, `TimeBase` (see decisions Q33 / Q34)
+//! - A seeded PRNG for the few places where the game uses `UnityEngine.Random`
+//! - `consts`: reverse-engineered constants (`docs/reverse/versions/cn-6.4.0/constants.yaml`)
 //!
 //! ## Not responsible for
-//! - Anything specific to PJSK
+//! - Anything specific to PJSK beyond the constant table
 //!
 //! ## Allowed dependencies
 //! None on `sse-*`. This is the leaf of the dependency graph.
+
+pub mod consts;
+pub mod det_math;
+pub mod fs;
+pub mod rng;
+pub mod time;
+
+pub use time::{FrameNo, SimFrame, TimeBase};

@@ -1,0 +1,114 @@
+//! # sse-params -- the parameter table (Pass 1 → Pass 2 seam, decision Q14)
+//!
+//! Plain data describing the complete visual and audio state of every frame. `sse-bake`
+//! writes it; `sse-render` and `sse-export` read it. Living in its own crate keeps the
+//! iron rule structural: the renderer depends on this data, never on the timeline or the
+//! scenario. Format notes: `docs/spec/param-table.md`.
+//!
+//! ## Allowed dependencies
+//! `sse-core` only.
+
+use serde::{Deserialize, Serialize};
+
+pub const PARAM_TABLE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamTable {
+    pub version: u32,
+    pub fps: u32,
+    /// Models referenced by `CharacterState::model` (library-relative bundle dirs).
+    pub models: Vec<String>,
+    pub frames: Vec<FrameState>,
+    pub audio: Vec<AudioCue>,
+    /// Approximations and unsupported content, for the export report.
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FrameState {
+    pub background: BackgroundState,
+    /// In draw order (back to front).
+    pub characters: Vec<CharacterState>,
+    /// `ColorFader` overlay colour, straight alpha.
+    pub fader: [f32; 4],
+    /// Camera blur amount in [0, 1].
+    pub blur: f32,
+    /// Monotone post effect (`influence`, `tone`, `mono`) when attached.
+    pub camera_color: Option<CameraColor>,
+    pub talk: Option<TalkState>,
+    pub telop: Option<BannerState>,
+    pub place_info: Option<BannerState>,
+    pub full_screen_text: Option<BannerState>,
+    /// A movie the renderer cannot show yet (placeholder).
+    pub movie: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BackgroundState {
+    pub current: Option<String>,
+    /// Crossfade source and the weight of `current` in [0, 1].
+    pub previous: Option<String>,
+    pub mix: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacterState {
+    pub character: i32,
+    /// Index into `ParamTable::models`.
+    pub model: usize,
+    pub opacity: f32,
+    /// Bottom-centre anchor offset in UI units (reference 1920×1080 space).
+    pub x: f32,
+    pub y: f32,
+    /// Layout-mode scale (`baseScale.x`).
+    pub scale: f32,
+    /// Ambient model colour (multiplied in).
+    pub color: [f32; 4],
+    /// Final Cubism parameter values, in the model's parameter order.
+    pub params: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CameraColor {
+    pub mono: [f32; 4],
+    pub tone: [f32; 4],
+    pub influence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TalkState {
+    pub name: String,
+    pub body: String,
+    /// UTF-16 units of `body` visible (`Substring(0, n)`).
+    pub visible: u32,
+    pub window_alpha: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BannerState {
+    pub text: String,
+    pub alpha: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioCue {
+    /// Library-relative waveform files (played together).
+    pub files: Vec<String>,
+    pub start_frame: u32,
+    /// Exclusive; `None` = until the file ends (or loop end).
+    pub stop_frame: Option<u32>,
+    pub looping: bool,
+    pub volume: f32,
+    /// Linear fades, in frames.
+    pub fade_in: u32,
+    pub fade_out: u32,
+    pub kind: AudioKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AudioKind {
+    Bgm,
+    Se,
+    Voice,
+    Movie,
+}
