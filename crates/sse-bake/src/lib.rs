@@ -498,14 +498,15 @@ impl<'a> Baker<'a> {
         });
     }
 
-    fn hide_talk_window(&mut self, frame: u32) {
+    /// `TalkWindow.Close` (0.2 s) or `SetVisible(false)` (0.15 s).
+    fn hide_talk_window(&mut self, frame: u32, seconds: f32) {
         if self.talk.is_some() {
             let a = self.talk_window.as_ref().map_or(1.0, |t| t.at(frame));
             self.talk_window = Some(Tween {
                 from: a,
                 to: 0.0,
                 start: frame,
-                frames: self.tb.frames_for(consts::TALK_WINDOW_FADE_DURATION),
+                frames: self.tb.frames_for(seconds),
                 ease_out_quad: false,
             });
         }
@@ -609,12 +610,13 @@ impl<'a> Baker<'a> {
         match &instr.kind {
             InstrKind::Wait => {}
             InstrKind::Talk(t) => {
-                if self.talk.is_none() || self.talk_window.as_ref().is_some_and(|w| w.to == 0.0) {
+                // `TalkWindow.Open`: PlayActive(1, 0.2) from alpha 0, linear
+                if timing.talk.as_ref().is_some_and(|tt| tt.opens_window) {
                     self.talk_window = Some(Tween {
                         from: 0.0,
                         to: 1.0,
                         start: f,
-                        frames: self.tb.frames_for(consts::TALK_WINDOW_FADE_DURATION),
+                        frames: self.tb.frames_for(consts::TALK_WINDOW_OPEN_CLOSE_DURATION),
                         ease_out_quad: false,
                     });
                 }
@@ -720,7 +722,8 @@ impl<'a> Baker<'a> {
             }
             InstrKind::Unsupported(u) => {
                 if let UnsupportedReason::Movie { name, files } = &u.reason {
-                    self.hide_talk_window(f);
+                    // PlayMovie → SetHideUI(true) → RefreshTalkWindow → SetVisible(false)
+                    self.hide_talk_window(f, consts::TALK_WINDOW_FADE_DURATION);
                     let video = files.iter().find(|x| x.0.ends_with(".m2v")).map(|x| x.0.clone());
                     self.movie = Some((name.clone(), video, f, timing.finish));
                     if let Some(w) = files.iter().find(|x| x.0.ends_with(".wav")) {
@@ -765,7 +768,7 @@ impl<'a> Baker<'a> {
                 c.lip.end_text(f);
             }
             if t.close_window_on_finish {
-                self.hide_talk_window(f);
+                self.hide_talk_window(f, consts::TALK_WINDOW_OPEN_CLOSE_DURATION);
             }
         }
     }
@@ -789,7 +792,6 @@ impl<'a> Baker<'a> {
                     ),
                     // Out: from the current colour to opaque
                     Direction::Out => {
-                        self.hide_talk_window(f);
                         let from = if self.fader[3] == 0.0 {
                             [rgb[0], rgb[1], rgb[2], 0.0]
                         } else {
@@ -807,7 +809,6 @@ impl<'a> Baker<'a> {
                 self.bg_tween = Some(Tween { from: 0.0, to: 1.0, start: f, frames, ease_out_quad: false });
             }
             EffectOp::Telop { text } => {
-                self.hide_talk_window(f);
                 let clip = self.tb.frames_for(consts::TELOP_ANIM_CLIP_LENGTH);
                 self.telop.push((text.clone(), f, timing.finish.saturating_sub(clip), timing.finish));
             }
@@ -824,7 +825,6 @@ impl<'a> Baker<'a> {
                 });
             }
             EffectOp::FullScreenText { text, voice, .. } => {
-                self.hide_talk_window(f);
                 let Some(t) = timing.full_screen_text.clone() else { return };
                 if t.first {
                     self.cinemascope.push((f, true));

@@ -19,6 +19,8 @@ together with its fidelity impact.
   地点栏 0.2 s OutQuart 滑入，下一句台词结束时滑出
 - 动作混合的"同类别"判定改为二进制规则（类别 = `^[a-z]-\w+-\w+` 前缀，普通动作即完整名字；过渡动作 `A_to_B` 也按 0.125 s），
   此前按名字第二段近似，会把同一角色的不同动作误判为同类别
+- 对话框开合按二进制：窗口关闭时先 0.2 s 线性淡入再开始打字；只有 `WhenFinishCloseWindow` 的台词结束时 0.2 s 淡出；
+  去掉了"淡出/Telop/全屏文字时隐藏对话框"这些无依据的规则（影片期间仍按 `SetHideUI` 0.15 s 隐藏）
 - 片尾影片按 ffmpeg 解码 `.m2v`，拉伸进居中的 2338×1080 `movieResolution` 矩形（此前是占位文字）
 - 参数表 v2：`FullScreenTextState`、`cinemascope`、`menu_alpha`、`TalkState.auto_time`、`MovieState`
 - **像素影响**：全片 UI、文字大小、角色位置、模糊强度均改变

@@ -78,6 +78,8 @@ pub struct TalkTiming {
     pub typing_end: u32,
     /// Seconds of the longest voice, when any voice plays.
     pub voice_seconds: Option<f32>,
+    /// The window was closed, so `TalkWindow.Play` opened it first (0.2 s) and typing waits.
+    pub opens_window: bool,
 }
 
 impl TalkTiming {
@@ -276,6 +278,10 @@ struct Scheduler<'a> {
     chars: BTreeMap<CharacterId, CharState>,
     /// TMP `characterInfo` length of the current full-screen text.
     fst_slots: u32,
+    /// `TalkWindow.windowState == Open` (it starts closed).
+    window_open: bool,
+    /// Frame `OnCompleteClose` sets the window closed.
+    window_closes_at: Option<u32>,
     timings: BTreeMap<u32, InstrTiming>,
     running: Vec<Task>,
     busy: BTreeSet<CharacterId>,
@@ -298,12 +304,13 @@ impl<'a> Scheduler<'a> {
             motions,
             chars: BTreeMap::new(),
             fst_slots: 0,
+            window_open: false,
+            window_closes_at: None,
             timings: BTreeMap::new(),
             running: Vec::new(),
             busy: BTreeSet::new(),
             notes: vec![
                 "PlayCore is resumed before the snippet coroutines within a frame (Unity queue order)".into(),
-                "talk window is assumed ready immediately; its 0.15 s show fade is not waited for".into(),
             ],
         };
         for p in &ep.initial.layout {
@@ -497,6 +504,13 @@ impl<'a> Scheduler<'a> {
                         for c in self.chars.values_mut() {
                             c.pending.clear();
                         }
+                        // OnClick: `if (isAutoClose) Close()` → OnCompleteClose after 0.2 s
+                        if let InstrKind::Talk(t) = &self.instrs[task.pos].kind
+                            && t.close_window_on_finish
+                        {
+                            self.window_closes_at =
+                                Some(frame + self.tb.frames_for(consts::TALK_WINDOW_OPEN_CLOSE_DURATION));
+                        }
                         return true;
                     }
                 },
@@ -659,8 +673,21 @@ impl<'a> Scheduler<'a> {
         let half = self.tb.frames_for(consts::WORD_INTERVAL * 0.5);
         let per_char = half * 2;
         let length = t.body.encode_utf16().count() as u32;
+        if self.window_closes_at.is_some_and(|c| c <= frame) {
+            self.window_open = false;
+            self.window_closes_at = None;
+        }
+        // `TalkWindow.Play`: a closed window opens first; `OnCompleteOpen` calls `Play` again,
+        // which starts `ShowWords` (the voice and motions have already started).
+        let opens_window = !self.window_open;
+        let typing_start = if opens_window {
+            self.window_open = true;
+            frame + self.tb.frames_for(consts::TALK_WINDOW_OPEN_CLOSE_DURATION)
+        } else {
+            frame
+        };
         // ShowWords: iterations i = 0..=length, each shows i units then waits two halves.
-        let typing_end = frame + (length + 1) * per_char;
+        let typing_end = typing_start + (length + 1) * per_char;
         let voice = t
             .voices
             .iter()
@@ -690,12 +717,13 @@ impl<'a> Scheduler<'a> {
             j += 1;
         }
         self.timings.get_mut(&index).expect("started").talk = Some(TalkTiming {
-            typing_start: frame,
+            typing_start,
             frames_per_char: per_char,
             frames_per_half: half,
             length,
             typing_end,
             voice_seconds: voice,
+            opens_window,
         });
         Wait::TalkAuto {
             stage: TalkStage::Typing { typing_end },

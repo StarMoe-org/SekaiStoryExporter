@@ -113,6 +113,9 @@ pub const FST_VOICE_TIMEOUT: f32 = 10.0;
 pub const TMP_CHARACTER_INFO_INITIAL: u32 = 8;
 /// `talk.window_fade_duration`.
 pub const TALK_WINDOW_FADE_DURATION: f32 = 0.15;
+/// `TalkWindow.Open` / `Close` (0x16E57FC / 0x16E5B98): `PlayActive(1 | 0, 0.2)`, linear.
+/// Typing starts from `OnCompleteOpen`, i.e. after the fade-in.
+pub const TALK_WINDOW_OPEN_CLOSE_DURATION: f32 = 0.2;
 /// `talk.line_advance_px`.
 pub const TALK_LINE_ADVANCE_PX: f32 = 48.0;
 
@@ -230,6 +233,7 @@ mod tests {
         check("layout.hide_slide_fade_offset", HIDE_SLIDE_FADE_OFFSET);
         check("sekai.in_fade_delay", SEKAI_IN_FADE_DELAY);
         check("sekai.out_fade_delay", SEKAI_OUT_FADE_DELAY);
+        check("talk.window_open_close_duration", TALK_WINDOW_OPEN_CLOSE_DURATION);
         check("sekai_transition.lifetime", SEKAI_TRANSITION_LIFETIME);
         check("live2d.body_motion_fade", BODY_MOTION_FADE);
         check("live2d.facial_fade", FACIAL_FADE);
