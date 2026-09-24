@@ -409,6 +409,15 @@ impl<'a> Scheduler<'a> {
             frame += 1;
             if frame > MAX_FRAMES {
                 let at = self.instrs.get(seq).map_or(u32::MAX, |i| i.index);
+                if std::env::var_os("SSE_DEBUG_STUCK").is_some() {
+                    for t in &self.running {
+                        eprintln!("running snippet {} started {} wait {:?}", t.index, t.started, t.wait);
+                    }
+                    for (id, c) in &self.chars {
+                        eprintln!("char {id:?} shown {} body {:?} pending {:?}", c.shown, c.body, c.pending);
+                    }
+                    eprintln!("busy {:?} window_open {}", self.busy, self.window_open);
+                }
                 return Err(TimelineError::Stuck(MAX_FRAMES, at));
             }
         }
@@ -456,12 +465,16 @@ impl<'a> Scheduler<'a> {
 
     /// Resumes running task `k`. Returns true when it finished this frame.
     fn resume(&mut self, k: usize, frame: u32) -> bool {
+        // The slot keeps the task's own index and position while it runs, so checks over
+        // `running` (the talk gate's "is a layout snippet running") see it as itself and skip
+        // it, instead of seeing a stand-in for snippet 0.
+        let (index, pos) = (self.running[k].index, self.running[k].pos);
         let mut task = std::mem::replace(
             &mut self.running[k],
             Task {
-                index: 0,
+                index,
                 started: 0,
-                pos: 0,
+                pos,
                 wait: Wait::Delay { until: 0 },
             },
         );
