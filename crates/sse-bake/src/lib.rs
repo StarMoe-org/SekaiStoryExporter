@@ -692,7 +692,7 @@ impl<'a> Baker<'a> {
                     for c in self.chars.values_mut() {
                         c.visible = false;
                     }
-                    note(&mut self.notes, "movies: video decoded with ffmpeg, cover-fit to the screen (movie layer framing not reversed)");
+                    note(&mut self.notes, "movies: video decoded with ffmpeg into the 2338×1080 movie rect (CRI Mana decoder not used)");
                 } else {
                     note(&mut self.notes, &format!("unsupported snippet: {:?}", u.reason));
                 }

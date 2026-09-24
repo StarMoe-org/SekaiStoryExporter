@@ -597,11 +597,10 @@ impl Gpu {
         }
         self.queue.write_buffer(&m.positions, 0, bytemuck::cast_slice(&positions));
         let [rtw, rth] = consts::LIVE2D_RT_SIZE;
-        // RenderStudio: ortho size 1.5, model at (0, 0.383), standScale 2.8, plus the
-        // measured vertical correction (open question #43): with the RT top at the screen
-        // top the face sits 270 px (1080p) = 256 RT px = 0.5 world units too high, and the
-        // capture never clips the head, so the difference lies inside the RT.
-        let half_h = 1.5_f32;
+        // RenderStudio (landscape): ortho size 1.5, camera at the studio origin, model at
+        // stageRoot (0, fixedStagePosition.y × orthoSize) + standPosition (0, 0.383),
+        // standScale 2.8 (`live2d.md` §5).
+        let half_h = consts::LIVE2D_ORTHO_SIZE;
         let half_w = half_h * rtw as f32 / rth as f32;
         let draws: Vec<DrawGpu> = m
             .core
@@ -609,7 +608,7 @@ impl Gpu {
             .iter()
             .enumerate()
             .map(|(i, d)| DrawGpu {
-                xform: [2.8, 0.0, 0.383 + consts::LIVE2D_STAND_Y_MEASURED, 0.0],
+                xform: [2.8, 0.0, consts::LIVE2D_FIXED_STAGE_Y * consts::LIVE2D_ORTHO_SIZE + consts::LIVE2D_STAND_Y, 0.0],
                 half_extent: [half_w, half_h, rtw as f32, rth as f32],
                 tint: [1.0; 4],
                 params: [
@@ -734,11 +733,14 @@ impl Gpu {
         let mut enc = self.device.create_command_encoder(&Default::default());
         // `ScenarioPostProcessRenderPass.RenderBlur` (0x4A15AC4): point-sampled blit to
         // 1/DownSample, then Iterations × (V pass, U pass) with `_BlurSize = spread·i + 1`,
-        // then a point-sampled blit back. The tap offsets are in *full-resolution* texels
-        // (`Blitter` binds `_BlitTexture`, so `_MainTex_TexelSize` keeps the camera target's):
-        // fitted on the capture, σ ≈ 8 px at spread 3 matches √(0.9244·(1²+4²+7²)) = 7.8.
+        // then a point-sampled blit back. `Hidden/Sekai/Scenario/Post` offsets its taps by
+        // `_BlitTexture_TexelSize × _BlurSize`; `Blitter.BlitTexture` (0x49D9FF8) binds the
+        // temporary via `MaterialPropertyBlock.SetTexture(int, Texture)`, so the texel size is
+        // the half-resolution one. The blur's on-screen size therefore depends on the render
+        // resolution (Q28: native = output resolution).
         if plan.blur > 0.001 {
             let spread = plan.blur * consts::BLUR_MAX_SPREAD;
+            let (hw, hh) = ((self.width / consts::BLUR_DOWN_SAMPLE) as f32, (self.height / consts::BLUR_DOWN_SAMPLE) as f32);
             let scene_view = self.scene.view.clone();
             let (a, b) = (self.half[0].view.clone(), self.half[1].view.clone());
             let blit = |this: &mut Self, enc: &mut wgpu::CommandEncoder, src: &wgpu::TextureView, dst: &wgpu::TextureView, pipe: bool, step: [f32; 2]| {
@@ -752,8 +754,8 @@ impl Gpu {
             blit(self, &mut enc, &scene_view, &a, false, [0.0; 2]);
             for i in 0..consts::BLUR_ITERATIONS {
                 let size = spread * i as f32 + 1.0;
-                blit(self, &mut enc, &a, &b, true, [0.0, size / h]);
-                blit(self, &mut enc, &b, &a, true, [size / w, 0.0]);
+                blit(self, &mut enc, &a, &b, true, [0.0, size / hh]);
+                blit(self, &mut enc, &b, &a, true, [size / hw, 0.0]);
             }
             blit(self, &mut enc, &a, &scene_view, false, [0.0; 2]);
         }

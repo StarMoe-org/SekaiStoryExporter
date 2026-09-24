@@ -137,7 +137,7 @@ impl Renderer {
             ui,
             ui_images,
             native,
-            movie: movie::MovieDecoder::new("ffmpeg".into(), cfg.width, cfg.height, table.fps),
+            movie: movie::MovieDecoder::new("ffmpeg".into(), cfg.width, cfg.height, movie_rect(&cfg), table.fps),
             movie_image,
             movie_key: None,
             text_key: None,
@@ -196,9 +196,10 @@ impl Renderer {
             let s = content[1] * c.scale / consts::LIVE2D_SCALE_REFERENCE_HEIGHT;
             let (qw, qh) = (rtw as f32 * s * k, rth as f32 * s * k);
             let cx = (content[0] * 0.5 + c.x) * k;
-            // RT top at the screen top; the model sits `LIVE2D_STAND_Y_MEASURED` lower inside
-            // the RT than the studio's stand position says (open question #43, see gpu.rs).
-            let top = -c.y * k;
+            // `Live2DModelView.UpdateRenderOrientation` (0x3CF9050): anchors (0.5, 0), prefab
+            // pivot (0.5, 0), `anchoredPosition` = transform data (x, y) — the RT's bottom
+            // edge sits on the screen's bottom edge (`scenarioLayer` fills the screen).
+            let top = h - qh - c.y * k;
             plan.characters.push(gpu::CharacterDraw {
                 model: c.model,
                 params: c.params.clone(),
@@ -358,7 +359,6 @@ impl Renderer {
             "masks rendered per drawable at RT resolution (game: shared 1024² × 4 atlas)".into(),
             "text rasterised from Source Han Sans (not TMP SDF); boxes, sizes and underlay from the prefabs, TMP line breaking approximated".into(),
             "talk window, name bar, auto signal and menu button rebuilt from the prefabs (sprites user-supplied); telop / place-info from third-party overlays".into(),
-            "character vertical placement measured, not reversed (stand y − 0.5 in the RT, open question #43)".into(),
         ]
     }
 
@@ -369,7 +369,7 @@ impl Renderer {
 
     /// Uses this `ffmpeg` for movie frames.
     pub fn set_ffmpeg(&mut self, ffmpeg: PathBuf) {
-        self.movie = movie::MovieDecoder::new(ffmpeg, self.cfg.width, self.cfg.height, self.fps);
+        self.movie = movie::MovieDecoder::new(ffmpeg, self.cfg.width, self.cfg.height, movie_rect(&self.cfg), self.fps);
     }
 
     /// Notes that depend on the supplied assets.
@@ -384,4 +384,11 @@ impl Renderer {
     pub fn ui(&self) -> &UiAssets {
         &self.ui
     }
+}
+
+/// `ScenarioPlayer.movieResolution` (2338, 1080) in target pixels.
+fn movie_rect(cfg: &RenderConfig) -> (u32, u32) {
+    let k = cfg.ui_scale();
+    let [w, h] = consts::MOVIE_RESOLUTION;
+    ((w * k).round() as u32, (h * k).round() as u32)
 }

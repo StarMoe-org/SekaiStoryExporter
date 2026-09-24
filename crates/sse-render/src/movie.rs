@@ -1,6 +1,7 @@
 //! Movie frames through an `ffmpeg` child process. Frames are requested by index at the
 //! output frame rate; sequential requests read the pipe, anything else restarts with a seek.
-//! The frame is cover-fitted to the output size (scaled to fill, centred crop).
+//! The video is stretched into the movie rect (`ScenarioPlayer.<LoadMovie>d__187` sets the
+//! centred `UIMovieTexture` to `sizeDelta = movieResolution`), then framed by the screen.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,8 @@ pub struct MovieDecoder {
     ffmpeg: PathBuf,
     width: u32,
     height: u32,
+    /// Movie rect in target pixels (centred).
+    rect: (u32, u32),
     fps: u32,
     stream: Option<Stream>,
 }
@@ -32,8 +35,8 @@ impl Drop for Stream {
 }
 
 impl MovieDecoder {
-    pub fn new(ffmpeg: PathBuf, width: u32, height: u32, fps: u32) -> Self {
-        Self { ffmpeg, width, height, fps, stream: None }
+    pub fn new(ffmpeg: PathBuf, width: u32, height: u32, rect: (u32, u32), fps: u32) -> Self {
+        Self { ffmpeg, width, height, rect, fps, stream: None }
     }
 
     /// RGBA8 of frame `index` (at the output rate) of `file`; after the end, the last frame.
@@ -68,7 +71,10 @@ impl MovieDecoder {
             .arg(file)
             .args([
                 "-vf",
-                &format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps={}", self.fps),
+                &format!(
+                    "scale={}:{},pad=max(iw\\,{w}):max(ih\\,{h}):(ow-iw)/2:(oh-ih)/2,crop={w}:{h},fps={}",
+                    self.rect.0, self.rect.1, self.fps
+                ),
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
