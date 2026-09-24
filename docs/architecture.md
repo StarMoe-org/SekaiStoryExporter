@@ -34,7 +34,7 @@ Live2D 的 motion fade 与 physics 是累积状态，不能任意 seek。但**�
 
 ```
 SekaiStoryExporter/
-├── Cargo.toml               workspace（13 crate + xtask）
+├── Cargo.toml               workspace（14 crate + xtask）
 ├── clippy.toml              ⭐ 确定性规约的编译期防线
 ├── rust-toolchain.toml      工具链钉版本 + 双平台 target
 │
@@ -81,9 +81,10 @@ sse-timeline        ← core, ir, assets
 sse-live2d          ← core, assets          （唯一允许 unsafe 的 crate）
 sse-ugui            ← core, assets
 sse-text            ← core, assets, ugui
-sse-bake            ← 以上大部分          （Pass 1）
-sse-render          ← core, assets, live2d, ugui, text   （Pass 2）
-sse-export          ← core, render
+sse-params          ← core                 （参数表类型，Pass 1 / Pass 2 的接缝）
+sse-bake            ← core, ir, assets, timeline, live2d, params   （Pass 1）
+sse-render          ← core, assets, live2d, text, params   （Pass 2）
+sse-export          ← core, assets, params, render
 sse-fidelity        ← core
 sse-cli             ← 全部
 ```
