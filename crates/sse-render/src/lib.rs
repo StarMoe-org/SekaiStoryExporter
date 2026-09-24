@@ -20,6 +20,8 @@
 //! - Masks are per-drawable at RT resolution, not the game's shared 1024² × 4 atlas
 //! - Hardware bilinear sampling (determinism R-8 asks for manual bilinear)
 
+mod fx;
+mod fx_data;
 mod gpu;
 mod movie;
 mod native_ui;
@@ -95,6 +97,8 @@ pub struct Renderer {
     text_key: Option<String>,
     lib: Library,
     fps: u32,
+    /// `tex_common_tri_01` (the transition triangles' 4×4 atlas), from the `--ui` dir.
+    fx_atlas: Option<gpu::Image>,
 }
 
 impl Renderer {
@@ -118,6 +122,7 @@ impl Renderer {
         let dialog_overlay = load_ui(&mut gpu, &ui.dialog)?;
         let native = native_ui::NativeUi::load(&mut gpu, &ui.sprites);
         let movie_image = gpu.image(&image::RgbaImage::new(cfg.width, cfg.height));
+        let fx_atlas = sse_assets::load_png(&ui.sprites.join("tex_common_tri_01.png")).ok().map(|i| gpu.image(&i));
         let font = |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
         Ok(Self {
             body_font: font(&ui.font_body)?,
@@ -135,6 +140,7 @@ impl Renderer {
             text_key: None,
             lib: lib.clone(),
             fps: table.fps,
+            fx_atlas,
         })
     }
 
@@ -199,6 +205,27 @@ impl Renderer {
                 color: c.color,
                 rect: [cx - qw * 0.5, top, qw, qh],
             });
+        }
+
+        // EffectLayer: `fx_transition_scenario`, re-simulated from its instantiation
+        if let (Some(fx), Some(atlas)) = (&frame.fx, &self.fx_atlas) {
+            let mut sim = fx::TransitionFx::new(fx.seed);
+            let dt = 1.0 / self.fps as f32;
+            for _ in 0..fx.age_frames {
+                sim.step(dt);
+            }
+            for (mat, corners, uv, color) in sim.billboards([w, h]) {
+                // corners are (-,-) (+,-) (+,+) (-,+) with y up; `uv` is Unity's v-up tile
+                // rect, and our atlas rows are top-down, so v flips
+                let [u0, v0, u1, v1] = uv;
+                plan.particles.push(gpu::ParticleDraw {
+                    additive: mat == fx::Material::Additive,
+                    image: atlas.id,
+                    corners,
+                    uvs: [[u0, 1.0 - v0], [u1, 1.0 - v0], [u1, 1.0 - v1], [u0, 1.0 - v1]],
+                    color,
+                });
+            }
         }
 
         // 3. fader, post

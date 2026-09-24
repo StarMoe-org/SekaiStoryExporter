@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PARAM_TABLE_VERSION: u32 = 2;
+pub const PARAM_TABLE_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamTable {
@@ -46,6 +46,20 @@ pub struct FrameState {
     pub menu_alpha: f32,
     /// `PlayMovie`: the movie layer covers the scenario.
     pub movie: Option<MovieState>,
+    /// `fx_transition_scenario` instance (`SnippetActionSpecialEffect` cases 21 / 41).
+    pub fx: Option<FxState>,
+}
+
+/// One live `fx_transition_scenario` copy. The prefab hangs off `ScenarioPlayer.effectLayer`
+/// for `DestroyAtTime.deleteAtTime` = 5 s; the renderer re-simulates `age_frames` steps from
+/// the start, so its output stays a pure function of the frame.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct FxState {
+    /// Frames since the prefab was instantiated.
+    pub age_frames: u32,
+    /// Seeds the emitters with `autoRandomSeed`; the game randomises those per instance, so
+    /// ours is derived from the instance and only has to be reproducible.
+    pub seed: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

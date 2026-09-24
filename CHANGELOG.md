@@ -27,6 +27,9 @@ together with its fidelity impact.
 - 地点栏隐藏位置按根画布与 UI 相机数据推出（`DefaultPosX` 混用世界坐标）：16:9 为 −578.22，此前近似 −580
 - 文字排版支持 TMP `characterSpacing`（每字 `spacing × fontSize × 0.01`，行宽不含末字字距）；
   AUTO 标签按 `ActiveAutoObject`（自动模式只留一个三角）与 Rodin EB 字形算出的首选宽度 85.26 做横向布局，与录像 ±1 px
+- **Sekai 转场粒子**（`fx_transition_scenario`）：按 prefab 的 ParticleSystem 模块做 CPU 模拟（burst、cone 形状、
+  Hermite 速度曲线、旋转、颜色随生命周期、图集图块、噪声、限速），两种材质的混合按 shader；画在对话框与白幕之下。
+  噪声为近似；发射点按二进制居中，与录像（右下角）不一致，见开放问题 #50。参数表 v3（`FxState`）
 - 口型平滑系数按 `Live2DVoice.UpdateParam`：以当前值（而非目标值）是否 < 0.1 选择 (0.6, 0.4)
 - 片尾影片按 ffmpeg 解码 `.m2v`，拉伸进居中的 2338×1080 `movieResolution` 矩形（此前是占位文字）
 - 参数表 v2：`FullScreenTextState`、`cinemascope`、`menu_alpha`、`TalkState.auto_time`、`MovieState`

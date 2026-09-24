@@ -209,6 +209,8 @@ struct Baker<'a> {
     cinemascope: Vec<(u32, bool)>,
     /// (name, video file, start frame, end frame)
     movie: Option<(String, Option<String>, u32, u32)>,
+    /// `fx_transition_scenario`: (first frame, frames until `DestroyAtTime`).
+    fx: Option<(u32, u32)>,
     audio: Vec<AudioCue>,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
@@ -257,6 +259,7 @@ impl<'a> Baker<'a> {
             cinemascope: Vec::new(),
             auto_since: None,
             movie: None,
+            fx: None,
             audio: Vec::new(),
             bgm: None,
             se_loops: BTreeMap::new(),
@@ -877,7 +880,12 @@ impl<'a> Baker<'a> {
                 }
                 let start = f + self.tb.frames_for(delay);
                 self.fade_color(to, Some(if *dir == Direction::Out && from[3] == 0.0 { [1.0, 1.0, 1.0, 0.0] } else { from }), start, d);
-                note(&mut self.notes, "Sekai transition particles (fx_transition_scenario) not rendered; white ColorFader only");
+                // Case 21 / 41 instantiate `fx_transition_scenario` under `effectLayer`;
+                // case 20 / 40 only drive the fader. The copy is destroyed after 5 s.
+                if *dir == Direction::Out {
+                    self.fx = Some((f, self.tb.frames_for(consts::FX_LIFETIME)));
+                }
+                note(&mut self.notes, "Sekai transition particles: fx_transition_scenario simulated from the prefab modules (noise approximated)");
             }
             EffectOp::Noop => {}
             other => note(&mut self.notes, &format!("effect not rendered: {other:?}")),
@@ -968,6 +976,10 @@ impl<'a> Baker<'a> {
             cinemascope: self.cinemascope_at(f),
             menu_alpha: if movie.is_some() { 0.0 } else { 1.0 },
             movie,
+            fx: self.fx.and_then(|(start, frames)| {
+                (f >= start && f < start + frames)
+                    .then_some(sse_params::FxState { age_frames: f - start, seed: start.wrapping_mul(2654435761) })
+            }),
         }
     }
 }

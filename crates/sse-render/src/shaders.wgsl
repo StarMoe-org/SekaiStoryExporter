@@ -154,3 +154,27 @@ fn mono_fs(i: QuadOut) -> @location(0) vec4<f32> {
     let inf = post.influence.x;
     return vec4<f32>(post.tone.rgb * lum * inf + c.rgb * (1.0 - inf), 1.0);
 }
+
+// ---------------------------------------------------------------- particles
+
+struct ParticleOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+@vertex
+fn particle_vs(@location(0) px: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>) -> ParticleOut {
+    var o: ParticleOut;
+    o.pos = vec4<f32>(px.x / quad.dst.x * 2.0 - 1.0, 1.0 - px.y / quad.dst.y * 2.0, 0.0, 1.0);
+    o.uv = uv;
+    o.color = color;
+    return o;
+}
+
+// `Sekai/Particles/{Additive,AlphaBlended}`: `SV_Target0 = tex × COLOR0`; the blend state
+// does the rest.
+@fragment
+fn particle_fs(i: ParticleOut) -> @location(0) vec4<f32> {
+    return textureSample(quad_tex, quad_smp, i.uv) * i.color;
+}

@@ -48,6 +48,18 @@ impl QuadDraw {
     }
 }
 
+/// One `fx_transition_scenario` billboard in target pixels.
+pub struct ParticleDraw {
+    /// `Sekai/Particles/Additive` (true) or `AlphaBlended`.
+    pub additive: bool,
+    pub image: ImageId,
+    /// Corners in order (0, 1, 2, 3) around the quad, with their UVs.
+    pub corners: [[f32; 2]; 4],
+    pub uvs: [[f32; 2]; 4],
+    /// Vertex colour, straight alpha (`startColor × colourOverLifetime`).
+    pub color: [f32; 4],
+}
+
 pub struct CharacterDraw {
     pub model: usize,
     pub params: Vec<f32>,
@@ -64,6 +76,9 @@ pub struct FramePlan {
     pub characters: Vec<CharacterDraw>,
     pub blur: f32,
     pub camera_color: Option<sse_params::CameraColor>,
+    /// `EffectLayer` particles: canvas sorting order 245, between `ForegroundLayer` (240)
+    /// and the `UILayer` (280) that holds the talk window and `FrontCover` fader.
+    pub particles: Vec<ParticleDraw>,
     /// Scenario UI (talk window, menu button): after post effects, under the fader.
     pub ui: Vec<QuadDraw>,
     /// `FrontCover` `ColorFader`: above the scenario UI.
@@ -135,6 +150,8 @@ pub struct Gpu {
     blur_pipe: wgpu::RenderPipeline,
     point_pipe: wgpu::RenderPipeline,
     mono_pipe: wgpu::RenderPipeline,
+    /// Particle billboards: [additive, alpha-blended].
+    particle_pipes: [wgpu::RenderPipeline; 2],
     rt: Tex,
     masks: Vec<Tex>,
     dummy_mask: Tex,
@@ -320,6 +337,21 @@ impl Gpu {
         let blur_pipe = pipe(&quad_pl, "post_vs", "blur_fs", &[], FMT, None, true);
         let point_pipe = pipe(&quad_pl, "post_vs", "point_fs", &[], FMT, None, true);
         let mono_pipe = pipe(&quad_pl, "post_vs", "mono_fs", &[], FMT, None, true);
+        // `Sekai/Particles/Additive`: Blend SrcAlpha One; `AlphaBlended`: SrcAlpha
+        // OneMinusSrcAlpha (both `ZWrite Off`, `Cull Off`; destination alpha kept).
+        let pvb = [Some(wgpu::VertexBufferLayout {
+            array_stride: 8 * 4,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
+            ],
+        })];
+        let particle_pipes = [
+            pipe(&quad_pl, "particle_vs", "particle_fs", &pvb, FMT, Some(blend(F::SrcAlpha, F::One, F::Zero, F::One)), false),
+            pipe(&quad_pl, "particle_vs", "particle_fs", &pvb, FMT, Some(blend(F::SrcAlpha, F::OneMinusSrcAlpha, F::Zero, F::One)), false),
+        ];
 
         let [rtw, rth] = consts::LIVE2D_RT_SIZE;
         let ra = wgpu::TextureUsages::RENDER_ATTACHMENT;
@@ -365,6 +397,7 @@ impl Gpu {
             quad_pipe,
             blur_pipe,
             mono_pipe,
+            particle_pipes,
             rt,
             masks: Vec::new(),
             dummy_mask,
@@ -557,6 +590,39 @@ impl Gpu {
                 )
             })
             .collect()
+    }
+
+    /// Draws billboards in order, switching blend per draw (Unity renders them in sorting
+    /// order; one draw per billboard keeps the additive / alpha interleaving exact).
+    fn particles(&mut self, enc: &mut wgpu::CommandEncoder, draws: &[ParticleDraw]) {
+        use wgpu::util::DeviceExt;
+        if draws.is_empty() {
+            return;
+        }
+        let (w, h) = (self.width as f32, self.height as f32);
+        let mut verts: Vec<f32> = Vec::with_capacity(draws.len() * 6 * 8);
+        for d in draws {
+            for &k in &[0usize, 1, 2, 0, 2, 3] {
+                verts.extend_from_slice(&[d.corners[k][0], d.corners[k][1], d.uvs[k][0], d.uvs[k][1]]);
+                verts.extend_from_slice(&d.color);
+            }
+        }
+        let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("particles"),
+            contents: bytemuck::cast_slice(&verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let q = QuadGpu { rect: [0.0; 4], uv: [0.0; 4], color: [1.0; 4], target: [w, h, 0.0, 0.0] };
+        let bgs: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.quad_bind(d.image, q)).collect();
+        let out_view = self.output_view.clone();
+        let mut rp = Self::pass(enc, &out_view, None);
+        rp.set_vertex_buffer(0, vbuf.slice(..));
+        for (i, d) in draws.iter().enumerate() {
+            rp.set_pipeline(&self.particle_pipes[if d.additive { 0 } else { 1 }]);
+            rp.set_bind_group(0, &bgs[i], &[]);
+            let v0 = (i * 6) as u32;
+            rp.draw(v0..v0 + 6, 0..1);
+        }
     }
 
     fn pass<'e>(
@@ -775,6 +841,8 @@ impl Gpu {
             rp.set_bind_group(0, &bg, &[]);
             rp.draw(0..4, 0..1);
         }
+        // EffectLayer particles, then the UILayer (talk window, fader) on top
+        self.particles(&mut enc, &plan.particles);
         // overlay + UI + text
         let mut ui: Vec<wgpu::BindGroup> = self.quads(&plan.ui);
         ui.extend(self.quads(&plan.overlay));

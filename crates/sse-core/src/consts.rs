@@ -81,6 +81,8 @@ pub fn place_info_hidden_x(content_size: [f32; 2]) -> f32 {
 }
 /// SekaiIn (20 / 40): `ColorFader.Set(white)` then fades to transparent after this delay.
 pub const SEKAI_IN_FADE_DELAY: f32 = 0.25;
+/// `DestroyAtTime.deleteAtTime` on `fx_transition_scenario` (`resources.assets|15600`).
+pub const FX_LIFETIME: f32 = 5.0;
 /// SekaiOut (21 / 41): fades to opaque white after this delay (with the particle prefab).
 pub const SEKAI_OUT_FADE_DELAY: f32 = 0.5;
 /// Delay before a hide fade when the character stays in place (`0x3E19999A`,
@@ -247,6 +249,7 @@ mod tests {
         check("sekai.out_fade_delay", SEKAI_OUT_FADE_DELAY);
         check("talk.window_open_close_duration", TALK_WINDOW_OPEN_CLOSE_DURATION);
         check("place_info.width", PLACE_INFO_WIDTH);
+        check("fx.transition_lifetime", FX_LIFETIME);
         check("ui.camera_ortho_size", UI_CAMERA_ORTHO_SIZE);
         check("sekai_transition.lifetime", SEKAI_TRANSITION_LIFETIME);
         check("live2d.body_motion_fade", BODY_MOTION_FADE);
