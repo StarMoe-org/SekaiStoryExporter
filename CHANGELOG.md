@@ -25,6 +25,8 @@ together with its fidelity impact.
 - 台词内嵌动作按 `SnippetActionTalk` / `TalkMotionChangeSyncVoiceTime` / `OnTalkWindowOnLetter`：开头 `TimingSyncValue == 0`
   的动作同一帧全部播放（此前每帧一条错开），其余按 PlayTime 协程或 Text 逐字回调；bake 直接用时间线给出的动作时刻
 - 地点栏隐藏位置按根画布与 UI 相机数据推出（`DefaultPosX` 混用世界坐标）：16:9 为 −578.22，此前近似 −580
+- 文字排版支持 TMP `characterSpacing`（每字 `spacing × fontSize × 0.01`，行宽不含末字字距）；
+  AUTO 标签按 `ActiveAutoObject`（自动模式只留一个三角）与 Rodin EB 字形算出的首选宽度 85.26 做横向布局，与录像 ±1 px
 - 口型平滑系数按 `Live2DVoice.UpdateParam`：以当前值（而非目标值）是否 < 0.1 选择 (0.6, 0.4)
 - 片尾影片按 ffmpeg 解码 `.m2v`，拉伸进居中的 2338×1080 `movieResolution` 矩形（此前是占位文字）
 - 参数表 v2：`FullScreenTextState`、`cinemascope`、`menu_alpha`、`TalkState.auto_time`、`MovieState`

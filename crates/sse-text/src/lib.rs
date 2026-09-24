@@ -69,6 +69,9 @@ pub struct Style {
     pub outline: Option<[f32; 4]>,
     /// TMP `UNDERLAY_ON`: colour and downward offset in em (softness 0, dilate 0).
     pub underlay: Option<([f32; 4], f32)>,
+    /// TMP `characterSpacing` (em / 100): every advance gains `spacing × size × 0.01`
+    /// (`currentEmScale`, orthographic UI); line widths drop the last glyph's share.
+    pub char_spacing: f32,
 }
 
 impl Style {
@@ -140,8 +143,9 @@ struct Placed {
     units_end: u32,
 }
 
-fn layout(font: &Font, chars: &[(char, u32)], size: f32, width: f32) -> Vec<Placed> {
+fn layout(font: &Font, chars: &[(char, u32)], size: f32, width: f32, spacing: f32) -> Vec<Placed> {
     let sf = font.font.as_scaled(font.em(size));
+    let gap = spacing * size * 0.01;
     let mut out: Vec<Placed> = Vec::new();
     let mut line = 0;
     let mut x = 0.0_f32;
@@ -181,11 +185,11 @@ fn layout(font: &Font, chars: &[(char, u32)], size: f32, width: f32) -> Vec<Plac
                 // carried characters keep their index
                 p.line = line;
                 p.x = x;
-                x += sf.h_advance(font.font.glyph_id(p.c));
+                x += sf.h_advance(font.font.glyph_id(p.c)) + gap;
             }
         }
         out.push(Placed { c, idx: i, x, line, units_end: u });
-        x += adv;
+        x += adv + gap;
         i += 1;
     }
     out
@@ -237,7 +241,7 @@ pub fn draw_faded(
     // auto-size: shrink until the lines fit the box height
     let mut size = style.size;
     let placed = loop {
-        let placed = layout(font, &chars, size, frame.width);
+        let placed = layout(font, &chars, size, frame.width, style.char_spacing);
         let lines = placed.last().map_or(1, |p| p.line + 1) as f32;
         let height = (ASCENT - DESCENT) * size / POINT_SIZE + (lines - 1.0) * style.line_advance(size);
         if !style.auto_size || height <= frame.height || size <= style.min_size {

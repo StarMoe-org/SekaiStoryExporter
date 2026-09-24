@@ -268,6 +268,7 @@ impl Renderer {
             color: [1.0, 1.0, 1.0, 1.0],
             outline,
             underlay: None,
+            char_spacing: 0.0,
         };
         let name = sse_text::Style {
             size: 44.0,
@@ -277,6 +278,7 @@ impl Renderer {
             color: [0.921_568_6, 0.921_568_6, 0.949_019_6, 1.0],
             outline,
             underlay: None,
+            char_spacing: 0.0,
         };
         let banner = sse_text::Style { auto_size: false, ..body };
         let frame_at = |x: f32, y: f32, bw: f32, bh: f32, align: f32, valign: f32| sse_text::Frame {
@@ -294,10 +296,16 @@ impl Renderer {
             sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, rect(l::NAME, 0.0, 0.0), &name, t.window_alpha);
             sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, rect(l::WORDS, 0.0, 0.0), &body, t.window_alpha);
             if self.native.has_window() {
-                let auto = sse_text::Style { size: 32.0, auto_size: false, outline: None, ..name };
-                // characterSpacing −4 is not implemented; widen the box so it cannot wrap
-                let [x, y, w, h] = l::AUTO_TEXT;
-                sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect([x - 20.0, y, w + 40.0, h], 0.5, 0.5), &auto, t.window_alpha);
+                // `AutoSignalText`: 32, white, centre / middle, characterSpacing −4, no outline
+                let auto = sse_text::Style {
+                    size: 32.0,
+                    auto_size: false,
+                    outline: None,
+                    color: [1.0; 4],
+                    char_spacing: l::AUTO_TEXT_SPACING,
+                    ..name
+                };
+                sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect(l::AUTO_TEXT, 0.5, 0.5), &auto, t.window_alpha);
             }
         }
         let plain = sse_text::Style { auto_size: false, outline: None, ..body };
@@ -322,6 +330,7 @@ impl Renderer {
                 // SDF_Base_Scenario_Full: underlay black, offset (0, −1) → 1 × GradientScale 6 ×
                 // ScaleRatioC 0.677 atlas texels at point size 35
                 underlay: Some(([0.0, 0.0, 0.0, 1.0], 6.0 * 0.677_083_3 / 35.0)),
+                char_spacing: 0.0,
             };
             let text = b.text.trim_start_matches(['\n', '\r']);
             let progress = b.progress;

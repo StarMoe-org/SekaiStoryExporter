@@ -30,11 +30,22 @@ pub mod layout {
     pub const AUTO: [f32; 4] = [1656.0, 1008.0, 200.0, 48.0];
     /// `AutoSignal/bg` colour.
     pub const AUTO_BG_COLOR: [f32; 4] = [0.266_666_68, 0.266_666_68, 0.4, 0.8];
-    /// `AutoSignalIcon1` (28×22, rotated −90° about its centre) after the
-    /// `HorizontalLayoutGroup` (MiddleCenter, spacing 6): centre (1716, 1032).
-    pub const AUTO_ICON: [f32; 4] = [1705.0, 1018.0, 22.0, 28.0];
-    /// `AutoSignalText` (73.82×32).
-    pub const AUTO_TEXT: [f32; 4] = [1736.0, 1016.0, 73.82, 32.0];
+    /// `AutoSignalText` `characterSpacing`.
+    pub const AUTO_TEXT_SPACING: f32 = -4.0;
+    /// TMP preferred width of "AUTO" (`CalculatePreferredValues`: every advance but the last
+    /// gains `−4 × 32 × 0.01`): `FOT-RodinNTLGPro-EB-OnDemand` advances A 22.4375, U 26.1875,
+    /// T 21.875, O 26.953125 at point size 35, scaled by 32/35, no kerning pairs, spacing
+    /// offset 0. (The prefab's serialized 73.82 is a stale layout result.)
+    pub const AUTO_TEXT_WIDTH: f32 = 85.26;
+    /// `AutoSignal`'s `HorizontalLayoutGroup` (MiddleCenter, spacing 6, controls child size):
+    /// `icon` (its own group holds only `AutoSignalIcon1` in auto mode — `ActiveAutoObject`
+    /// disables icon 2 — so 28 wide) + 6 + `signalText` (the text's preferred width),
+    /// centred in the 200-wide signal.
+    const AUTO_ROW_X: f32 = AUTO[0] + (AUTO[2] - (28.0 + 6.0 + AUTO_TEXT_WIDTH)) * 0.5;
+    /// `AutoSignalIcon1` (28×22, rotated −90° about its centre): centre (row x + 14, 1032).
+    pub const AUTO_ICON: [f32; 4] = [AUTO_ROW_X + 14.0 - 11.0, 1018.0, 22.0, 28.0];
+    /// `AutoSignalText`, sized to its preferred width.
+    pub const AUTO_TEXT: [f32; 4] = [AUTO_ROW_X + 34.0, 1016.0, AUTO_TEXT_WIDTH, 32.0];
     /// `TweenAlpha` on the icon: visible for the first 0.5028 s of each 1 s loop.
     pub const AUTO_ICON_ON: f32 = 0.502_762_44;
     /// `UIPartsMenuButton`: 96×96 centred at top-right − (64, 64).
