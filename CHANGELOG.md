@@ -6,6 +6,13 @@
 **Project-specific rule**: any change that alters output pixels must be recorded here
 together with its fidelity impact.
 
+
+## 未发布
+
+- 日服：`sse` 按 library 的 `ripper.lock.json` `region` 选字体（jp → `FOT-RodinNTLGPro-DB/EB.otf`，
+  cn → 思源黑体 SC），`--game cn|jp` 可覆盖。依据见 `docs/reverse/versions/jp-6.8.1/text.md`：
+  日服 TalkWindow 排版、FaceInfo 与 CN 逐项相同，只有源字体不同。
+
 ## [Unreleased]
 
 ### 修复 / Fixed（2026-09-24，对标原生录制的画面校准）

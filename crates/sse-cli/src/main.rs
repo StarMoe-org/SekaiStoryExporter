@@ -82,18 +82,41 @@ struct OutputArgs {
     /// Directory with the user-supplied UI overlays and fonts (see README).
     #[arg(long, env = "SSE_UI_DIR")]
     ui: PathBuf,
+    /// Which client's fonts to use: cn or jp. Default: the `region` the library was ripped from
+    /// (`ripper.lock.json`), else cn.
+    #[arg(long, value_parser = ["cn", "jp"])]
+    game: Option<String>,
+}
+
+/// The server a SekaiStoryRipper library was ripped from (`region` in its lock file; CN before
+/// the lock recorded one).
+fn library_region(library: &std::path::Path) -> String {
+    std::fs::read(library.join("ripper.lock.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("region")?.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "cn".into())
 }
 
 impl OutputArgs {
-    fn ui_assets(&self) -> sse_render::UiAssets {
+    /// Both clients' talk windows use `FOT-RodinNTLGPro-DB SDF_Base` for the words and `-EB` for
+    /// the name, with the same FaceInfo and layout (docs/reverse/versions/jp-6.8.1/text.md). Only
+    /// the source font behind them differs: CN renamed Source Han Sans SC Medium/Bold, JP the real
+    /// FOT-RodinNTLG Pro DB/EB.
+    fn ui_assets(&self, library: &std::path::Path) -> sse_render::UiAssets {
         let opt = |name: &str| {
             let p = self.ui.join(name);
             p.is_file().then_some(p)
         };
+        let game = self.game.clone().unwrap_or_else(|| library_region(library));
+        let (body, name) = match game.as_str() {
+            "jp" => ("FOT-RodinNTLGPro-DB.otf", "FOT-RodinNTLGPro-EB.otf"),
+            _ => ("SourceHanSansSC-Medium.otf", "SourceHanSansSC-Bold.otf"),
+        };
         sse_render::UiAssets {
             dialog: opt("Dialogue_Background.png"),
-            font_body: self.ui.join("SourceHanSansSC-Medium.otf"),
-            font_name: self.ui.join("SourceHanSansSC-Bold.otf"),
+            font_body: self.ui.join(body),
+            font_name: self.ui.join(name),
             sprites: self.ui.clone(),
         }
     }
@@ -128,7 +151,7 @@ fn main() -> Result<()> {
         }
         Command::Render { selector, frame, output, out } => {
             let table = bake(&lib, selector, &opts, out.config())?;
-            let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets())?;
+            let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&cli.library))?;
             let f = table
                 .frames
                 .get(*frame as usize)
@@ -139,7 +162,7 @@ fn main() -> Result<()> {
         }
         Command::Export { selector, output, from, to, crf, ffmpeg, out } => {
             let table = bake(&lib, selector, &opts, out.config())?;
-            let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets())?;
+            let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&cli.library))?;
             r.set_ffmpeg(ffmpeg.clone());
             let n = table.frames.len() as u32;
             let range = from.unwrap_or(0).min(n)..to.unwrap_or(n).min(n);
