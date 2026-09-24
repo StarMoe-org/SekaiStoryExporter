@@ -135,6 +135,14 @@ fn blur_fs(i: QuadOut) -> @location(0) vec4<f32> {
     return c;
 }
 
+// Blitter.BlitCameraTexture(..., bilinear: false): nearest texel of the source.
+@fragment
+fn point_fs(i: QuadOut) -> @location(0) vec4<f32> {
+    let dims = vec2<f32>(textureDimensions(post_tex));
+    let p = vec2<i32>(clamp(floor(i.uv * dims), vec2<f32>(0.0), dims - 1.0));
+    return textureLoad(post_tex, p, 0);
+}
+
 @fragment
 fn mono_fs(i: QuadOut) -> @location(0) vec4<f32> {
     let c = textureSample(post_tex, post_smp, i.uv);

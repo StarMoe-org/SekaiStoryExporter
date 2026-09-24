@@ -41,6 +41,13 @@ impl Font {
             .map_err(|e| TextError::Font(path.display().to_string(), e.to_string()))?;
         Ok(Self { font })
     }
+
+    /// `ab_glyph`'s `PxScale` is the pixel height of ascent − descent, while TMP's font size
+    /// is the em. Converts an em size in pixels to the matching `PxScale`.
+    fn em(&self, em_px: f32) -> PxScale {
+        let upem = self.font.units_per_em().unwrap_or(1000.0);
+        PxScale::from(em_px * self.font.height_unscaled() / upem)
+    }
 }
 
 /// TMP FaceInfo of the game's font assets.
@@ -60,6 +67,8 @@ pub struct Style {
     /// Straight-alpha face colour.
     pub color: [f32; 4],
     pub outline: Option<[f32; 4]>,
+    /// TMP `UNDERLAY_ON`: colour and downward offset in em (softness 0, dilate 0).
+    pub underlay: Option<([f32; 4], f32)>,
 }
 
 impl Style {
@@ -124,13 +133,15 @@ const NO_LINE_END: &str = "（「『【〈《([{";
 
 struct Placed {
     c: char,
+    /// Index in the tag-stripped character list, line feeds included (TMP `characterInfo`).
+    idx: usize,
     x: f32,
     line: usize,
     units_end: u32,
 }
 
 fn layout(font: &Font, chars: &[(char, u32)], size: f32, width: f32) -> Vec<Placed> {
-    let sf = font.font.as_scaled(PxScale::from(size));
+    let sf = font.font.as_scaled(font.em(size));
     let mut out: Vec<Placed> = Vec::new();
     let mut line = 0;
     let mut x = 0.0_f32;
@@ -167,12 +178,13 @@ fn layout(font: &Font, chars: &[(char, u32)], size: f32, width: f32) -> Vec<Plac
             x = 0.0;
             let start = out.len() - carry.min(out.len());
             for p in &mut out[start..] {
+                // carried characters keep their index
                 p.line = line;
                 p.x = x;
                 x += sf.h_advance(font.font.glyph_id(p.c));
             }
         }
-        out.push(Placed { c, x, line, units_end: u });
+        out.push(Placed { c, idx: i, x, line, units_end: u });
         x += adv;
         i += 1;
     }
@@ -205,6 +217,22 @@ pub fn draw(
     style: &Style,
     alpha: f32,
 ) {
+    draw_faded(canvas, font, raw, visible_units, frame, style, alpha, &|_| 1.0);
+}
+
+/// [`draw`] with a per-character alpha, indexed like TMP's `characterInfo` (rich-text tags
+/// removed, line feeds counted).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_faded(
+    canvas: &mut Canvas,
+    font: &Font,
+    raw: &str,
+    visible_units: u32,
+    frame: Frame,
+    style: &Style,
+    alpha: f32,
+    char_alpha: &dyn Fn(usize) -> f32,
+) {
     let chars = strip_tags(raw);
     // auto-size: shrink until the lines fit the box height
     let mut size = style.size;
@@ -223,7 +251,7 @@ pub fn draw(
     let lines = placed.last().map_or(1, |p| p.line + 1);
     let block_h = (ASCENT - DESCENT) * size / POINT_SIZE * frame.scale + (lines - 1) as f32 * advance;
     let top = frame.y + (frame.height * frame.scale - block_h) * frame.valign;
-    let sf = font.font.as_scaled(PxScale::from(px_size));
+    let sf = font.font.as_scaled(font.em(px_size));
     let mut line_w = vec![0.0_f32; lines];
     for p in &placed {
         let w = (p.x + sf.h_advance(font.font.glyph_id(p.c)) / frame.scale) * frame.scale;
@@ -231,23 +259,31 @@ pub fn draw(
     }
     let visible: Vec<&Placed> = placed.iter().filter(|p| p.units_end <= visible_units).collect();
     let dilate = 1.7 * size / 40.0 * frame.scale;
-    for pass in 0..2 {
-        let color = if pass == 0 {
-            match style.outline {
-                Some(c) => c,
+    // pass 0: underlay, 1: outline, 2: face
+    for pass in 0..3 {
+        let (color, dy) = match pass {
+            0 => match style.underlay {
+                Some((c, em)) => (c, em * px_size),
                 None => continue,
-            }
-        } else {
-            style.color
+            },
+            1 => match style.outline {
+                Some(c) => (c, 0.0),
+                None => continue,
+            },
+            _ => (style.color, 0.0),
         };
         for p in &visible {
+            let alpha = alpha * char_alpha(p.idx);
+            if alpha <= 0.0 {
+                continue;
+            }
             let left = frame.x + (frame.width * frame.scale - line_w[p.line]) * frame.align;
             let gx = left + p.x * frame.scale;
-            let gy = top + ascent + p.line as f32 * advance;
+            let gy = top + ascent + p.line as f32 * advance + dy;
             let glyph = font
                 .font
                 .glyph_id(p.c)
-                .with_scale_and_position(PxScale::from(px_size), ab_glyph::point(gx, gy));
+                .with_scale_and_position(font.em(px_size), ab_glyph::point(gx, gy));
             let Some(outline) = font.font.outline_glyph(glyph) else { continue };
             let b = outline.px_bounds();
             let (bw, bh) = (b.width() as usize, b.height() as usize);
@@ -258,7 +294,7 @@ pub fn draw(
                     cov[y * bw + x] = c;
                 }
             });
-            if pass == 0 {
+            if pass == 1 {
                 draw_outline(canvas, &cov, bw, bh, b.min.x, b.min.y, dilate, color, alpha);
             } else {
                 for y in 0..bh {

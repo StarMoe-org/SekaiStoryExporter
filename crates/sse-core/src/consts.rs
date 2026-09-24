@@ -45,6 +45,15 @@ pub const PLAYER_NAME_PLACEHOLDER: &str = "{{playerName}}";
 pub const MOVE_DURATION_NORMAL: f32 = 0.5;
 pub const MOVE_DURATION_FAST: f32 = 0.33;
 pub const MOVE_DURATION_SLOW: f32 = 0.75;
+/// Measured, not reversed (open question #43): vertical correction of the Live2D stand
+/// position inside the 2304×1536 RT, in world units (512 RT px per unit), from matching the
+/// native capture at scale 1.00.
+pub const LIVE2D_STAND_Y_MEASURED: f32 = -0.5;
+/// `ScenarioStudioCamera.BlurIn/BlurOut` → `SetBlurEffect(iteration: 3, size, downSample: 2)`
+/// with `size` from 0 to 3 (`rendering.md`); `RenderBlur` 0x4A15AC4 uses them as below.
+pub const BLUR_ITERATIONS: u32 = 3;
+pub const BLUR_DOWN_SAMPLE: u32 = 2;
+pub const BLUR_MAX_SPREAD: f32 = 3.0;
 /// SekaiIn (20 / 40): `ColorFader.Set(white)` then fades to transparent after this delay.
 pub const SEKAI_IN_FADE_DELAY: f32 = 0.25;
 /// SekaiOut (21 / 41): fades to opaque white after this delay (with the particle prefab).

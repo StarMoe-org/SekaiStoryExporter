@@ -8,6 +8,17 @@ together with its fidelity impact.
 
 ## [Unreleased]
 
+### 修复 / Fixed（2026-09-24，对标原生录制的画面校准）
+- 角色纵向位置按录像实测（两个角色独立验证位移 0 px）：模型在 RT 内下移 0.5 世界单位，不再截头
+- 对话框按 `TalkWindow` prefab 重建（底板渐变、名字横条、AUTO 标签与闪烁三角、右上菜单按钮），sprite 由用户从客户端导出；
+  剧情 `ColorFader` 改到对话框与菜单之上
+- 全屏文字：黑边与 50% 底板、逐字渐显、56 号左对齐、Underlay 阴影
+- 相机模糊按 `RenderBlur` 实现（1/2 降采样、3 轮、全分辨率纹素偏移），与录像 σ≈8 一致
+- 字号按 em 换算（此前 `ab_glyph` 行高口径导致字小约 30%）；正文自动字号从 44 起算
+- 参数表 v2：`FullScreenTextState`、`cinemascope`、`menu_alpha`、`TalkState.auto_time`
+- **像素影响**：全片 UI、文字大小、角色位置、模糊强度均改变
+- Visuals calibrated against the native capture (character placement, prefab-accurate talk window, FST, blur, font size).
+
 ### 修复 / Fixed（2026-09-24，对标原生录制的节奏校准）
 - 用 PlayCover 原生录制（第一话，442 s）的 65 个语音间隔校准 `sse-timeline`：平均误差 0.663 s → 0.051 s，
   最大 3.15 s → 0.14 s（按录制时游戏的实际帧率 54.5 fps 模拟；方法与逆向依据见

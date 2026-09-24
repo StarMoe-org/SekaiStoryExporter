@@ -101,6 +101,39 @@ impl Banner {
     }
 }
 
+/// One `ScenarioFullScreenTextDialog.PlayCore` run.
+struct FstRun {
+    text: String,
+    end: u32,
+    timing: sse_timeline::FstTiming,
+}
+
+impl FstRun {
+    fn state(&self, f: u32, tb: TimeBase) -> Option<FullScreenTextState> {
+        let t = &self.timing;
+        if f < t.text_start || f >= self.end {
+            return None;
+        }
+        // TextAppearFade.Play: slot i fades in over frames [start + i·n, start + (i+1)·n),
+        // showing alpha = elapsed / textWait before each yield.
+        let k = f - t.text_start;
+        let n = t.frames_per_slot.max(1);
+        let slot = k / n;
+        let progress = if slot >= t.slots {
+            t.slots as f32
+        } else {
+            slot as f32 + ((k % n) as f32 * tb.delta() / consts::FST_TEXT_WAIT).min(1.0)
+        };
+        let alpha = match t.fade_start {
+            Some(s) if f >= s => {
+                1.0 - ((f - s) as f32 / tb.frames_for(consts::FST_PLAY_DURATION) as f32).min(1.0)
+            }
+            _ => 1.0,
+        };
+        Some(FullScreenTextState { text: self.text.clone(), progress, alpha })
+    }
+}
+
 struct Baker<'a> {
     lib: &'a Library,
     ep: &'a Episode,
@@ -125,10 +158,14 @@ struct Baker<'a> {
     blur_value: f32,
     camera_color: Option<CameraColor>,
     talk: Option<(u32, TalkState)>,
+    /// Frame the first talk window appeared (auto signal enabled).
+    auto_since: Option<u32>,
     talk_window: Option<Tween>,
     telop: Vec<Banner>,
     place_info: Option<(String, u32)>,
-    full_text: Vec<Banner>,
+    full_text: Vec<FstRun>,
+    /// `PlayCinemascope(show)` calls: (start frame, show).
+    cinemascope: Vec<(u32, bool)>,
     movie: Option<(String, u32)>,
     audio: Vec<AudioCue>,
     bgm: Option<usize>,
@@ -175,6 +212,8 @@ impl<'a> Baker<'a> {
             telop: Vec::new(),
             place_info: None,
             full_text: Vec::new(),
+            cinemascope: Vec::new(),
+            auto_since: None,
             movie: None,
             audio: Vec::new(),
             bgm: None,
@@ -539,6 +578,7 @@ impl<'a> Baker<'a> {
                         ease_out_quad: false,
                     });
                 }
+                self.auto_since.get_or_insert(f);
                 self.talk = Some((
                     instr.index,
                     TalkState {
@@ -546,6 +586,7 @@ impl<'a> Baker<'a> {
                         body: t.body.clone(),
                         visible: 0,
                         window_alpha: 1.0,
+                        auto_time: 0.0,
                     },
                 ));
                 for s in &t.speakers {
@@ -712,7 +753,6 @@ impl<'a> Baker<'a> {
                         self.fade_color([rgb[0], rgb[1], rgb[2], 1.0], Some(from), f, d);
                     }
                 }
-                note(&mut self.notes, "ColorFader is drawn above characters and below the talk window (layer not reversed)");
             }
             EffectOp::ChangeBackground { background, .. } => {
                 let new = background.as_ref().map(|b| b.0.clone());
@@ -732,14 +772,18 @@ impl<'a> Baker<'a> {
             }
             EffectOp::FullScreenText { text, voice, .. } => {
                 self.hide_talk_window(f);
-                let fade = self.tb.frames_for(consts::SCENARIO_FADE_TIME);
-                let text_start = timing.full_screen_text.as_ref().map_or(f, |t| t.text_start);
-                self.full_text.push(Banner { text: text.clone(), start: text_start, end: timing.finish, fade });
+                let Some(t) = timing.full_screen_text.clone() else { return };
+                if t.first {
+                    self.cinemascope.push((f, true));
+                }
+                if let Some(fade) = t.fade_start {
+                    self.cinemascope.push((fade, false));
+                }
                 if let Some(a) = voice {
                     let a = a.clone();
-                    self.one_shot(&a, text_start, 1.0, AudioKind::Voice);
+                    self.one_shot(&a, t.text_start, 1.0, AudioKind::Voice);
                 }
-                note(&mut self.notes, "FullScreenText layout approximated (centred white text)");
+                self.full_text.push(FstRun { text: text.clone(), end: timing.finish, timing: t });
             }
             EffectOp::Blur { dir } => {
                 let (from, to) = match dir {
@@ -747,7 +791,6 @@ impl<'a> Baker<'a> {
                     Direction::Out => (self.blur_value, 0.0),
                 };
                 self.blur = Some(Tween { from, to, start: f, frames: self.tb.frames_for(d), ease_out_quad: true });
-                note(&mut self.notes, "camera blur strength approximated (iteration/size not reversed)");
             }
             EffectOp::CameraColor { effect } => {
                 self.camera_color = Some(match effect {
@@ -787,6 +830,17 @@ impl<'a> Baker<'a> {
             EffectOp::Noop => {}
             other => note(&mut self.notes, &format!("effect not rendered: {other:?}")),
         }
+    }
+
+    /// `PlayCinemascope`: DOTween (default ease OutQuad) over `playDuration`.
+    fn cinemascope_at(&self, f: u32) -> f32 {
+        let Some(&(start, show)) = self.cinemascope.iter().rev().find(|(s, _)| *s <= f) else {
+            return 0.0;
+        };
+        let n = self.tb.frames_for(consts::FST_PLAY_DURATION).max(1);
+        let t = ((f - start) as f32 / n as f32).min(1.0);
+        let e = -t * (t - 2.0);
+        if show { e } else { 1.0 - e }
     }
 
     fn snapshot(&mut self, f: u32) -> FrameState {
@@ -834,6 +888,7 @@ impl<'a> Baker<'a> {
                 body: t.body.clone(),
                 visible,
                 window_alpha: self.talk_window.as_ref().map_or(1.0, |w| w.at(f)),
+                auto_time: self.auto_since.map_or(0.0, |s| f.saturating_sub(s) as f32 * self.tb.delta()),
             }
         });
         let movie = match &self.movie {
@@ -849,7 +904,9 @@ impl<'a> Baker<'a> {
             talk: talk.filter(|t| t.window_alpha > 0.0),
             telop: self.telop.iter().find_map(|b| b.state(f)),
             place_info: self.place_info.as_ref().map(|(t, _)| BannerState { text: t.clone(), alpha: 1.0 }),
-            full_screen_text: self.full_text.iter().find_map(|b| b.state(f)),
+            full_screen_text: self.full_text.iter().find_map(|b| b.state(f, self.tb)),
+            cinemascope: self.cinemascope_at(f),
+            menu_alpha: if movie.is_some() { 0.0 } else { 1.0 },
             movie,
         }
     }

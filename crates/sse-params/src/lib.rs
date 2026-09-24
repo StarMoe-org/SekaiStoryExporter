@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PARAM_TABLE_VERSION: u32 = 1;
+pub const PARAM_TABLE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamTable {
@@ -38,7 +38,12 @@ pub struct FrameState {
     pub talk: Option<TalkState>,
     pub telop: Option<BannerState>,
     pub place_info: Option<BannerState>,
-    pub full_screen_text: Option<BannerState>,
+    pub full_screen_text: Option<FullScreenTextState>,
+    /// `ScenarioFullScreenTextDialog` cinemascope: bar height and `Base` alpha, as the
+    /// eased fraction of the shown state (0 = hidden).
+    pub cinemascope: f32,
+    /// Scenario menu button (`UIPartsMenuButton`) opacity.
+    pub menu_alpha: f32,
     /// A movie the renderer cannot show yet (placeholder).
     pub movie: Option<String>,
 }
@@ -82,6 +87,19 @@ pub struct TalkState {
     /// UTF-16 units of `body` visible (`Substring(0, n)`).
     pub visible: u32,
     pub window_alpha: f32,
+    /// Seconds since the auto signal was enabled (first talk of the episode); drives the
+    /// `TweenAlpha` blink of its icon.
+    pub auto_time: f32,
+}
+
+/// `TextAppearFade`: character `i` (index in TMP's character list, line feeds included) has
+/// alpha `clamp(progress - i, 0, 1) × alpha`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullScreenTextState {
+    pub text: String,
+    pub progress: f32,
+    /// `FadeOutAll` multiplier.
+    pub alpha: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

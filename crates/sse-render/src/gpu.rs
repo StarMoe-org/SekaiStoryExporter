@@ -64,9 +64,12 @@ pub struct FramePlan {
     pub characters: Vec<CharacterDraw>,
     pub blur: f32,
     pub camera_color: Option<sse_params::CameraColor>,
-    /// Drawn after post effects (fader).
-    pub overlay: Vec<QuadDraw>,
+    /// Scenario UI (talk window, menu button): after post effects, under the fader.
     pub ui: Vec<QuadDraw>,
+    /// `FrontCover` `ColorFader`: above the scenario UI.
+    pub overlay: Vec<QuadDraw>,
+    /// Dialog layer (full-screen text): above the fader.
+    pub ui_top: Vec<QuadDraw>,
     pub text: Option<ImageId>,
 }
 
@@ -130,12 +133,14 @@ pub struct Gpu {
     mask_pipe: wgpu::RenderPipeline,
     quad_pipe: wgpu::RenderPipeline,
     blur_pipe: wgpu::RenderPipeline,
+    point_pipe: wgpu::RenderPipeline,
     mono_pipe: wgpu::RenderPipeline,
     rt: Tex,
     masks: Vec<Tex>,
     dummy_mask: Tex,
     scene: Tex,
-    tmp: Tex,
+    /// `RenderBlur` temporaries at `1 / DownSample` resolution.
+    half: [Tex; 2],
     output: wgpu::Texture,
     output_view: wgpu::TextureView,
     readback: wgpu::Buffer,
@@ -313,6 +318,7 @@ impl Gpu {
         let mask_pipe = pipe(&cubism_pl, "cubism_vs", "mask_fs", &vbufs, MASK_FMT, Some(blend(F::One, F::One, F::One, F::One)), false);
         let quad_pipe = pipe(&quad_pl, "quad_vs", "quad_fs", &[], FMT, Some(normal), true);
         let blur_pipe = pipe(&quad_pl, "post_vs", "blur_fs", &[], FMT, None, true);
+        let point_pipe = pipe(&quad_pl, "post_vs", "point_fs", &[], FMT, None, true);
         let mono_pipe = pipe(&quad_pl, "post_vs", "mono_fs", &[], FMT, None, true);
 
         let [rtw, rth] = consts::LIVE2D_RT_SIZE;
@@ -326,7 +332,8 @@ impl Gpu {
             wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
         );
         let scene = tex(&device, width, height, FMT, ra);
-        let tmp = tex(&device, width, height, FMT, ra);
+        let (hw, hh) = (width / consts::BLUR_DOWN_SAMPLE, height / consts::BLUR_DOWN_SAMPLE);
+        let half = [tex(&device, hw, hh, FMT, ra), tex(&device, hw, hh, FMT, ra)];
         let output = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("output"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -362,7 +369,8 @@ impl Gpu {
             masks: Vec::new(),
             dummy_mask,
             scene,
-            tmp,
+            half,
+            point_pipe,
             output,
             output_view,
             readback,
@@ -579,7 +587,10 @@ impl Gpu {
         }
         self.queue.write_buffer(&m.positions, 0, bytemuck::cast_slice(&positions));
         let [rtw, rth] = consts::LIVE2D_RT_SIZE;
-        // RenderStudio: ortho size 1.5, model at (0, 0.383), standScale 2.8
+        // RenderStudio: ortho size 1.5, model at (0, 0.383), standScale 2.8, plus the
+        // measured vertical correction (open question #43): with the RT top at the screen
+        // top the face sits 270 px (1080p) = 256 RT px = 0.5 world units too high, and the
+        // capture never clips the head, so the difference lies inside the RT.
         let half_h = 1.5_f32;
         let half_w = half_h * rtw as f32 / rth as f32;
         let draws: Vec<DrawGpu> = m
@@ -588,7 +599,7 @@ impl Gpu {
             .iter()
             .enumerate()
             .map(|(i, d)| DrawGpu {
-                xform: [2.8, 0.0, 0.383, 0.0],
+                xform: [2.8, 0.0, 0.383 + consts::LIVE2D_STAND_Y_MEASURED, 0.0],
                 half_extent: [half_w, half_h, rtw as f32, rth as f32],
                 tint: [1.0; 4],
                 params: [
@@ -711,19 +722,30 @@ impl Gpu {
         }
 
         let mut enc = self.device.create_command_encoder(&Default::default());
-        // blur (two separable passes, strength scales the tap distance)
+        // `ScenarioPostProcessRenderPass.RenderBlur` (0x4A15AC4): point-sampled blit to
+        // 1/DownSample, then Iterations × (V pass, U pass) with `_BlurSize = spread·i + 1`,
+        // then a point-sampled blit back. The tap offsets are in *full-resolution* texels
+        // (`Blitter` binds `_BlitTexture`, so `_MainTex_TexelSize` keeps the camera target's):
+        // fitted on the capture, σ ≈ 8 px at spread 3 matches √(0.9244·(1²+4²+7²)) = 7.8.
         if plan.blur > 0.001 {
-            let s = plan.blur * 3.0;
+            let spread = plan.blur * consts::BLUR_MAX_SPREAD;
             let scene_view = self.scene.view.clone();
-            let tmp_view = self.tmp.view.clone();
-            for (src, dst, step) in [(&scene_view, &tmp_view, [s / w, 0.0]), (&tmp_view, &scene_view, [0.0, s / h])] {
+            let (a, b) = (self.half[0].view.clone(), self.half[1].view.clone());
+            let blit = |this: &mut Self, enc: &mut wgpu::CommandEncoder, src: &wgpu::TextureView, dst: &wgpu::TextureView, pipe: bool, step: [f32; 2]| {
                 let p = PostGpu { step: [step[0], step[1], 0.0, 0.0], mono: [0.0; 4], tone: [0.0; 4], influence: [0.0; 4] };
-                let bg = self.view_bind(src, bytemuck::bytes_of(&p));
-                let mut rp = Self::pass(&mut enc, dst, None);
-                rp.set_pipeline(&self.blur_pipe);
+                let bg = this.view_bind(src, bytemuck::bytes_of(&p));
+                let mut rp = Self::pass(enc, dst, None);
+                rp.set_pipeline(if pipe { &this.blur_pipe } else { &this.point_pipe });
                 rp.set_bind_group(0, &bg, &[]);
                 rp.draw(0..4, 0..1);
+            };
+            blit(self, &mut enc, &scene_view, &a, false, [0.0; 2]);
+            for i in 0..consts::BLUR_ITERATIONS {
+                let size = spread * i as f32 + 1.0;
+                blit(self, &mut enc, &a, &b, true, [0.0, size / h]);
+                blit(self, &mut enc, &b, &a, true, [size / w, 0.0]);
             }
+            blit(self, &mut enc, &a, &scene_view, false, [0.0; 2]);
         }
         // monotone → output
         let cc = plan.camera_color;
@@ -742,8 +764,9 @@ impl Gpu {
             rp.draw(0..4, 0..1);
         }
         // overlay + UI + text
-        let mut ui: Vec<wgpu::BindGroup> = self.quads(&plan.overlay);
-        ui.extend(self.quads(&plan.ui));
+        let mut ui: Vec<wgpu::BindGroup> = self.quads(&plan.ui);
+        ui.extend(self.quads(&plan.overlay));
+        ui.extend(self.quads(&plan.ui_top));
         if let Some(t) = plan.text {
             ui.extend(self.quads(&[QuadDraw { image: Some(t), rect: [0.0, 0.0, w, h], color: [1.0; 4], premultiplied: true }]));
         }

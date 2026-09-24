@@ -21,6 +21,7 @@
 //! - Hardware bilinear sampling (determinism R-8 asks for manual bilinear)
 
 mod gpu;
+mod native_ui;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -52,6 +53,8 @@ pub struct UiAssets {
     pub place_info: Option<PathBuf>,
     pub font_body: PathBuf,
     pub font_name: PathBuf,
+    /// Directory holding the game's UI sprites under their sprite names (`native_ui`).
+    pub sprites: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,6 +89,7 @@ pub struct Renderer {
     images: BTreeMap<String, gpu::Image>,
     ui: UiAssets,
     ui_images: [Option<gpu::Image>; 3],
+    native: native_ui::NativeUi,
     body_font: sse_text::Font,
     name_font: sse_text::Font,
     text_key: Option<String>,
@@ -115,6 +119,7 @@ impl Renderer {
             load_ui(&mut gpu, &ui.telop)?,
             load_ui(&mut gpu, &ui.place_info)?,
         ];
+        let native = native_ui::NativeUi::load(&mut gpu, &ui.sprites);
         let font = |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
         Ok(Self {
             body_font: font(&ui.font_body)?,
@@ -125,6 +130,7 @@ impl Renderer {
             images: BTreeMap::new(),
             ui,
             ui_images,
+            native,
             text_key: None,
             lib: lib.clone(),
         })
@@ -180,16 +186,15 @@ impl Renderer {
             let s = content[1] * c.scale / consts::LIVE2D_SCALE_REFERENCE_HEIGHT;
             let (qw, qh) = (rtw as f32 * s * k, rth as f32 * s * k);
             let cx = (content[0] * 0.5 + c.x) * k;
-            // Vertical anchor not reversed yet (open question #43): the RT top is placed at
-            // the screen top, which matches the game's framing (head at the top, hips at
-            // the bottom) at 16:9.
-            let bottom = qh - c.y * k;
+            // RT top at the screen top; the model sits `LIVE2D_STAND_Y_MEASURED` lower inside
+            // the RT than the studio's stand position says (open question #43, see gpu.rs).
+            let top = -c.y * k;
             plan.characters.push(gpu::CharacterDraw {
                 model: c.model,
                 params: c.params.clone(),
                 opacity: c.opacity,
                 color: c.color,
-                rect: [cx - qw * 0.5, bottom - qh, qw, qh],
+                rect: [cx - qw * 0.5, top, qw, qh],
             });
         }
 
@@ -202,12 +207,19 @@ impl Renderer {
 
         // 4. UI
         if frame.movie.is_some() {
-            plan.ui.push(gpu::QuadDraw::solid([0.0, 0.0, w, h], [0.0, 0.0, 0.0, 1.0]));
+            plan.ui_top.push(gpu::QuadDraw::solid([0.0, 0.0, w, h], [0.0, 0.0, 0.0, 1.0]));
         }
-        if let Some(t) = &frame.talk
-            && let Some(img) = &self.ui_images[0] {
+        if let Some(t) = &frame.talk {
+            if self.native.has_window() {
+                self.native.talk(&mut plan.ui, k, t.window_alpha, t.auto_time);
+            } else if let Some(img) = &self.ui_images[0] {
                 plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0, 1.0, 1.0, t.window_alpha]));
             }
+        }
+        if frame.menu_alpha > 0.0 {
+            self.native.menu(&mut plan.ui, k, frame.menu_alpha);
+        }
+        native_ui::cinemascope(&mut plan.ui_top, k, w, h, frame.cinemascope);
         if let Some(b) = &frame.telop
             && let Some(img) = &self.ui_images[1] {
                 plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0, 1.0, 1.0, b.alpha]));
@@ -228,7 +240,7 @@ impl Renderer {
             frame.talk.as_ref().map(|t| (&t.name, &t.body, t.visible, (t.window_alpha * 255.0) as u8)),
             frame.telop.as_ref().map(|b| (&b.text, (b.alpha * 255.0) as u8)),
             frame.place_info.as_ref().map(|b| &b.text),
-            frame.full_screen_text.as_ref().map(|b| (&b.text, (b.alpha * 255.0) as u8)),
+            frame.full_screen_text.as_ref().map(|b| (&b.text, (b.progress * 64.0) as u32, (b.alpha * 255.0) as u8)),
             frame.movie.as_deref().unwrap_or("")
         );
         if self.text_key.as_deref() == Some(key.as_str()) {
@@ -237,13 +249,15 @@ impl Renderer {
         let (w, h) = (self.cfg.width as usize, self.cfg.height as usize);
         let mut canvas = sse_text::Canvas::new(w, h);
         let outline = Some([0.266_667, 0.266_667, 0.4, 0.6]);
+        // `Words`: enableAutoSizing picks the largest size in [22, 44] that fits
         let body = sse_text::Style {
-            size: 40.0,
+            size: 44.0,
             min_size: 22.0,
             auto_size: true,
             line_spacing: -80.0,
             color: [1.0, 1.0, 1.0, 1.0],
             outline,
+            underlay: None,
         };
         let name = sse_text::Style {
             size: 44.0,
@@ -252,6 +266,7 @@ impl Renderer {
             line_spacing: -80.0,
             color: [0.921_568_6, 0.921_568_6, 0.949_019_6, 1.0],
             outline,
+            underlay: None,
         };
         let banner = sse_text::Style { auto_size: false, ..body };
         let frame_at = |x: f32, y: f32, bw: f32, bh: f32, align: f32, valign: f32| sse_text::Frame {
@@ -263,9 +278,17 @@ impl Renderer {
             align,
             valign,
         };
+        let rect = |r: [f32; 4], align: f32, valign: f32| frame_at(r[0], r[1], r[2], r[3], align, valign);
         if let Some(t) = &frame.talk {
-            sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, frame_at(225.0, 775.0, 1400.0, 60.0, 0.0, 0.0), &name, t.window_alpha);
-            sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, frame_at(245.0, 845.0, 1368.3, 154.0, 0.0, 0.0), &body, t.window_alpha);
+            use native_ui::layout as l;
+            sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, rect(l::NAME, 0.0, 0.0), &name, t.window_alpha);
+            sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, rect(l::WORDS, 0.0, 0.0), &body, t.window_alpha);
+            if self.native.has_window() {
+                let auto = sse_text::Style { size: 32.0, auto_size: false, outline: None, ..name };
+                // characterSpacing −4 is not implemented; widen the box so it cannot wrap
+                let [x, y, w, h] = l::AUTO_TEXT;
+                sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect([x - 20.0, y, w + 40.0, h], 0.5, 0.5), &auto, t.window_alpha);
+            }
         }
         if let Some(b) = &frame.telop {
             sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, frame_at(0.0, 480.0, 1920.0, 120.0, 0.5, 0.5), &banner, b.alpha);
@@ -274,7 +297,31 @@ impl Renderer {
             sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, frame_at(40.0, 31.0, 800.0, 63.0, 0.0, 0.5), &sse_text::Style { size: 36.0, ..banner }, b.alpha);
         }
         if let Some(b) = &frame.full_screen_text {
-            sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, frame_at(160.0, 140.0, 1600.0, 800.0, 0.5, 0.5), &banner, b.alpha);
+            // `ScenarioFullScreenTextDialog/Text` (`resources.assets|576995`): 56, left,
+            // middle, line spacing −32, word wrap; `TextAppearFade` per character
+            let fst = sse_text::Style {
+                size: 56.0,
+                min_size: 56.0,
+                auto_size: false,
+                line_spacing: -32.0,
+                color: [1.0; 4],
+                outline: None,
+                // SDF_Base_Scenario_Full: underlay black, offset (0, −1) → 1 × GradientScale 6 ×
+                // ScaleRatioC 0.677 atlas texels at point size 35
+                underlay: Some(([0.0, 0.0, 0.0, 1.0], 6.0 * 0.677_083_3 / 35.0)),
+            };
+            let text = b.text.trim_start_matches(['\n', '\r']);
+            let progress = b.progress;
+            sse_text::draw_faded(
+                &mut canvas,
+                &self.body_font,
+                text,
+                u32::MAX,
+                rect(native_ui::layout::FST_TEXT, 0.0, 0.5),
+                &fst,
+                b.alpha,
+                &|i| (progress - i as f32).clamp(0.0, 1.0),
+            );
         }
         if let Some(m) = &frame.movie {
             let msg = format!("[movie: {m}]");
@@ -288,10 +335,19 @@ impl Renderer {
     pub fn notes() -> Vec<String> {
         vec![
             "masks rendered per drawable at RT resolution (game: shared 1024² × 4 atlas)".into(),
-            "text rasterised from Source Han Sans (not TMP SDF); layout approximated".into(),
-            "dialog / telop / place-info artwork from user-supplied overlays".into(),
-            "character vertical anchor approximated (RT top at screen top, open question #43)".into(),
+            "text rasterised from Source Han Sans (not TMP SDF); boxes, sizes and underlay from the prefabs, TMP line breaking approximated".into(),
+            "talk window, name bar, auto signal and menu button rebuilt from the prefabs (sprites user-supplied); telop / place-info from third-party overlays".into(),
+            "character vertical placement measured, not reversed (stand y − 0.5 in the RT, open question #43)".into(),
         ]
+    }
+
+    /// Notes that depend on the supplied assets.
+    pub fn asset_notes(&self) -> Vec<String> {
+        self.native
+            .missing
+            .iter()
+            .map(|s| format!("UI sprite {s}.png not supplied; that element is not drawn"))
+            .collect()
     }
 
     pub fn ui(&self) -> &UiAssets {

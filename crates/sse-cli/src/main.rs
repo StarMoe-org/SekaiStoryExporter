@@ -96,6 +96,7 @@ impl OutputArgs {
             place_info: opt("SceneText_TopLeft.png"),
             font_body: self.ui.join("SourceHanSansSC-Medium.otf"),
             font_name: self.ui.join("SourceHanSansSC-Bold.otf"),
+            sprites: self.ui.clone(),
         }
     }
 
@@ -160,6 +161,7 @@ fn main() -> Result<()> {
             let report = output.with_extension("report.txt");
             let mut notes = table.notes.clone();
             notes.extend(sse_render::Renderer::notes());
+            notes.extend(r.asset_notes());
             std::fs::write(&report, notes.join("\n") + "\n")?;
             println!("wrote {} (notes: {})", output.display(), report.display());
         }
