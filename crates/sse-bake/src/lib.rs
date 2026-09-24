@@ -57,6 +57,33 @@ struct Tween {
     ease_out_quad: bool,
 }
 
+/// A `ScenarioSideFadePlayer.Play` run.
+struct SideFadeRt {
+    from: [f32; 2],
+    to: [f32; 2],
+    start: u32,
+    frames: u32,
+    /// `OnPlayFinished` deactivates the panel for the *In types (mask 0xAA).
+    hide: bool,
+}
+
+impl SideFadeRt {
+    fn at(&self, frame: u32) -> Option<[f32; 2]> {
+        if frame >= self.start + self.frames && self.hide {
+            return None;
+        }
+        let p = if self.frames == 0 || frame >= self.start + self.frames {
+            1.0
+        } else if frame <= self.start {
+            0.0
+        } else {
+            let t = (frame - self.start) as f32 / self.frames as f32;
+            -t * (t - 2.0)
+        };
+        Some([self.from[0] + (self.to[0] - self.from[0]) * p, self.from[1] + (self.to[1] - self.from[1]) * p])
+    }
+}
+
 impl Tween {
     fn at(&self, frame: u32) -> f32 {
         if self.frames == 0 || frame >= self.start + self.frames {
@@ -215,6 +242,7 @@ struct Baker<'a> {
     /// `screenShakeTweener` on `scenarioRoot` / `TalkWindow.ShakeWindow` on `windowRectTransform`.
     screen_shake: Option<shake::Shake>,
     window_shake: Option<shake::Shake>,
+    side_fade: Option<SideFadeRt>,
     audio: Vec<AudioCue>,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
@@ -266,6 +294,7 @@ impl<'a> Baker<'a> {
             fx: None,
             screen_shake: None,
             window_shake: None,
+            side_fade: None,
             audio: Vec::new(),
             bgm: None,
             se_loops: BTreeMap::new(),
@@ -908,6 +937,26 @@ impl<'a> Baker<'a> {
                 self.window_shake = Some(shake::Shake::new(&mut self.rng, f, fps, d, 10.0, 16, 90.0, true, true));
             }
             // cases 25 / 26: kill the tween; `OnFinishShake*` puts the base position back
+            // cases 29-36 → `ScenarioSideFadePlayer.Play(FadeType, Duration)` (JP 6.8.1 switch:
+            // 29→LeftIn 1, 30→LeftOut 0, 31→RightIn 3, 32→RightOut 2, 33→TopIn 5, 34→TopOut 4,
+            // 35→BottomIn 7, 36→BottomOut 6). `Play` sets `anchoredPosition` to `from` and
+            // `DOAnchorPos(to, Duration)` (OutQuad); the *In types deactivate it at the end.
+            // W/H = `ScreenManager.contentSize`.
+            EffectOp::SideFade { effect_type } => {
+                let [w, h] = self.opts.content_size;
+                let (ox, oy) = (w + 512.0, h + 512.0);
+                let (from, to, hide) = match effect_type {
+                    29 => ([0.0, 0.0], [ox, 0.0], true),
+                    30 => ([-ox, 0.0], [0.0, 0.0], false),
+                    31 => ([0.0, 0.0], [-ox, 0.0], true),
+                    32 => ([ox, 0.0], [0.0, 0.0], false),
+                    33 => ([0.0, 0.0], [0.0, -oy], true),
+                    34 => ([0.0, oy], [0.0, 0.0], false),
+                    35 => ([0.0, 0.0], [0.0, oy], true),
+                    _ => ([0.0, -oy], [0.0, 0.0], false),
+                };
+                self.side_fade = Some(SideFadeRt { from, to, start: f, frames: self.tb.frames_for(d), hide });
+            }
             EffectOp::StopShakeScreen => self.screen_shake = None,
             EffectOp::StopShakeWindow => self.window_shake = None,
             EffectOp::Noop => {}
@@ -1005,6 +1054,7 @@ impl<'a> Baker<'a> {
             }),
             scenario_shake: self.screen_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
             window_shake: self.window_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
+            side_fade: self.side_fade.as_ref().and_then(|s| s.at(f)),
         }
     }
 }

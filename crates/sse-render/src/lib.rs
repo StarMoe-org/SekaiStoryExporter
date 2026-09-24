@@ -99,6 +99,8 @@ pub struct Renderer {
     fps: u32,
     /// `tex_common_tri_01` (the transition triangles' 4×4 atlas), from the `--ui` dir.
     fx_atlas: Option<gpu::Image>,
+    /// `tex_transition_top` / `tex_transition_left` (the side fade's feathered edges).
+    side_edges: Option<(gpu::Image, gpu::Image)>,
 }
 
 impl Renderer {
@@ -123,6 +125,11 @@ impl Renderer {
         let native = native_ui::NativeUi::load(&mut gpu, &ui.sprites);
         let movie_image = gpu.image(&image::RgbaImage::new(cfg.width, cfg.height));
         let fx_atlas = sse_assets::load_png(&ui.sprites.join("tex_common_tri_01.png")).ok().map(|i| gpu.image(&i));
+        let edge = |n: &str| sse_assets::load_png(&ui.sprites.join(n)).ok();
+        let side_edges = match (edge("tex_transition_top.png"), edge("tex_transition_left.png")) {
+            (Some(t), Some(l)) => Some((gpu.image(&t), gpu.image(&l))),
+            _ => None,
+        };
         let font = |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
         Ok(Self {
             body_font: font(&ui.font_body)?,
@@ -141,6 +148,7 @@ impl Renderer {
             lib: lib.clone(),
             fps: table.fps,
             fx_atlas,
+            side_edges,
         })
     }
 
@@ -285,8 +293,53 @@ impl Renderer {
             self.native.place_info(&mut plan.ui, k, p.x);
         }
         plan.text = Some(self.text_canvas(frame, k, telop_text)?);
+        if let Some(p) = frame.side_fade {
+            self.side_fade(&mut plan.cover, k, content, p);
+        }
 
         Ok(self.gpu.render(&mut self.models, &plan)?)
+    }
+
+    /// `SideFadePlayer` prefab (JP 6.8.1 `resources.assets|121155`): the root stretches over the
+    /// canvas with sizeDelta 64×64 and is a black `AtlasImage`; four 512-px `CustomImage`
+    /// children in Tiled mode sit outside its edges — `top` (anchors top, pivot (0,0)) and
+    /// `bottom` (its y-mirror) with `tex_transition_top`, `left` (anchors left, pivot (1,0)) and
+    /// `right` (its x-mirror) with `tex_transition_left`. Sprite PPU 1 on a reference-PPU-1
+    /// canvas → 512-px tiles; UGUI's tiled path maps each tile onto the sprite's `textureRect`
+    /// (top: Unity y 0–384 of 512 → image rows 128–512; left: x 128–512), starting at the
+    /// rect's minimum corner. `p` is the root's anchoredPosition (+y up).
+    fn side_fade(&self, out: &mut Vec<gpu::QuadDraw>, k: f32, content: [f32; 2], p: [f32; 2]) {
+        const EDGE: f32 = 512.0;
+        const TRIM: f32 = 128.0 / 512.0;
+        let [cw, ch] = content;
+        // root rect in canvas pixels, top-left origin
+        let (x0, y0, rw, rh) = (-32.0 + p[0], -32.0 - p[1], cw + 64.0, ch + 64.0);
+        let px = |r: [f32; 4]| [r[0] * k, r[1] * k, r[2] * k, r[3] * k];
+        out.push(gpu::QuadDraw::solid(px([x0, y0, rw, rh]), [0.0, 0.0, 0.0, 1.0]));
+        let Some((top, left)) = &self.side_edges else { return };
+        // horizontal strips: tiles run left → right from x0
+        let mut x = 0.0;
+        while x < rw {
+            let tw = (rw - x).min(EDGE);
+            let u1 = tw / EDGE;
+            // top: dense rows (image bottom) against the panel
+            out.push(gpu::QuadDraw::image_uv(top.id, px([x0 + x, y0 - EDGE, tw, EDGE]), [0.0, TRIM, u1, 1.0], [1.0; 4]));
+            // bottom: y-mirror
+            out.push(gpu::QuadDraw::image_uv(top.id, px([x0 + x, y0 + rh, tw, EDGE]), [0.0, 1.0, u1, TRIM], [1.0; 4]));
+            x += EDGE;
+        }
+        // vertical strips: tiles run bottom → top (Unity y) from the root's bottom
+        let mut y = 0.0;
+        while y < rh {
+            let th = (rh - y).min(EDGE);
+            let v0 = 1.0 - th / EDGE;
+            let ty = y0 + rh - y - th;
+            // left: dense columns (image right) against the panel
+            out.push(gpu::QuadDraw::image_uv(left.id, px([x0 - EDGE, ty, EDGE, th]), [TRIM, v0, 1.0, 1.0], [1.0; 4]));
+            // right: x-mirror
+            out.push(gpu::QuadDraw::image_uv(left.id, px([x0 + rw, ty, EDGE, th]), [1.0, v0, TRIM, 1.0], [1.0; 4]));
+            y += EDGE;
+        }
     }
 
     /// Rasterises all text of the frame; re-uploads only when it changed.

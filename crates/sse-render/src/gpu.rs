@@ -35,6 +35,8 @@ pub struct Image {
 pub struct QuadDraw {
     image: Option<ImageId>,
     rect: [f32; 4],
+    /// u0, v0, u1, v1 (top-down image rows); swapped ends mirror.
+    uv: [f32; 4],
     color: [f32; 4],
     premultiplied: bool,
 }
@@ -46,10 +48,13 @@ impl QuadDraw {
     }
 
     pub fn image(id: ImageId, rect: [f32; 4], color: [f32; 4]) -> Self {
-        Self { image: Some(id), rect, color, premultiplied: false }
+        Self { image: Some(id), rect, uv: [0.0, 0.0, 1.0, 1.0], color, premultiplied: false }
+    }
+    pub fn image_uv(id: ImageId, rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) -> Self {
+        Self { image: Some(id), rect, uv, color, premultiplied: false }
     }
     pub fn solid(rect: [f32; 4], color: [f32; 4]) -> Self {
-        Self { image: None, rect, color, premultiplied: false }
+        Self { image: None, rect, uv: [0.0, 0.0, 1.0, 1.0], color, premultiplied: false }
     }
 }
 
@@ -91,6 +96,8 @@ pub struct FramePlan {
     /// Dialog layer (full-screen text): above the fader.
     pub ui_top: Vec<QuadDraw>,
     pub text: Option<ImageId>,
+    /// `SideFadePlayer`: last sibling of `UILayer`, drawn over the talk window and its text.
+    pub cover: Vec<QuadDraw>,
 }
 
 #[repr(C)]
@@ -588,7 +595,7 @@ impl Gpu {
                     img,
                     QuadGpu {
                         rect: q.rect,
-                        uv: [0.0, 0.0, 1.0, 1.0],
+                        uv: q.uv,
                         color: q.color,
                         target: [w, h, if q.premultiplied { 1.0 } else { 0.0 }, 0.0],
                     },
@@ -853,8 +860,9 @@ impl Gpu {
         ui.extend(self.quads(&plan.overlay));
         ui.extend(self.quads(&plan.ui_top));
         if let Some(t) = plan.text {
-            ui.extend(self.quads(&[QuadDraw { image: Some(t), rect: [0.0, 0.0, w, h], color: [1.0; 4], premultiplied: true }]));
+            ui.extend(self.quads(&[QuadDraw { image: Some(t), rect: [0.0, 0.0, w, h], uv: [0.0, 0.0, 1.0, 1.0], color: [1.0; 4], premultiplied: true }]));
         }
+        ui.extend(self.quads(&plan.cover));
         let out_view = self.output_view.clone();
         self.draw_quads(&mut enc, &out_view, &ui, None);
 

@@ -54,6 +54,10 @@ pub struct FrameState {
     /// ShakeWindow offset of the talk window, reference-canvas pixels, +y up.
     #[serde(default)]
     pub window_shake: [f32; 2],
+    /// `ScenarioSideFadePlayer` while active: its `anchoredPosition` (reference-canvas pixels,
+    /// +y up; zero = covering the screen).
+    #[serde(default)]
+    pub side_fade: Option<[f32; 2]>,
 }
 
 /// One live `fx_transition_scenario` copy. The prefab hangs off `ScenarioPlayer.effectLayer`
