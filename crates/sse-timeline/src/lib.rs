@@ -80,15 +80,19 @@ pub struct TalkTiming {
     pub voice_seconds: Option<f32>,
     /// The window was closed, so `TalkWindow.Play` opened it first (0.2 s) and typing waits.
     pub opens_window: bool,
+    /// Talk-embedded motions the game plays: (frame, index into `Talk::motions`).
+    /// See [`talk_motion_schedule`].
+    pub motions: Vec<(u32, usize)>,
 }
 
 impl TalkTiming {
-    /// Number of UTF-16 units visible at `frame` (`words.Substring(0, n)`).
+    /// Number of UTF-16 units visible at `frame` (`words.Substring(0, n)`). `PlayWords()`
+    /// passes `startFirst = true`, so the first iteration already shows one unit.
     pub fn visible_at(&self, frame: u32) -> u32 {
         if frame < self.typing_start {
             return 0;
         }
-        ((frame - self.typing_start) / self.frames_per_char).min(self.length)
+        ((frame - self.typing_start) / self.frames_per_char + 1).min(self.length)
     }
 }
 
@@ -504,6 +508,9 @@ impl<'a> Scheduler<'a> {
                         for c in self.chars.values_mut() {
                             c.pending.clear();
                         }
+                        if let Some(tt) = self.timings.get_mut(&task.index).and_then(|t| t.talk.as_mut()) {
+                            tt.motions.retain(|&(at, _)| at < frame);
+                        }
                         // OnClick: `if (isAutoClose) Close()` → OnCompleteClose after 0.2 s
                         if let InstrKind::Talk(t) = &self.instrs[task.pos].kind
                             && t.close_window_on_finish
@@ -686,35 +693,25 @@ impl<'a> Scheduler<'a> {
         } else {
             frame
         };
-        // ShowWords: iterations i = 0..=length, each shows i units then waits two halves.
-        let typing_end = typing_start + (length + 1) * per_char;
+        // ShowWords(startFirst: true): `visibleWordLength = 1`; iteration i shows i + 1 units
+        // and waits two halves, until `visibleWordLength > words.Length`. An empty body goes
+        // straight to `OnEndShowWords`.
+        let typing_end = typing_start + length * per_char;
         let voice = t
             .voices
             .iter()
             .filter_map(|v| v.voice.as_ref())
             .map(|a| self.durations.of(a))
             .fold(None, |m: Option<f32>, d| Some(m.map_or(d, |m| m.max(d))));
-        // Talk-embedded body motions. `TalkMotionChangeSyncVoiceTime` starts synchronously:
-        // iteration j runs at frame + j with `elapsed = (j + 1) * dt` and plays at most one
-        // motion per iteration once `elapsed >= TimingSyncValue`.
-        let mut j = 0u32;
-        let dt = self.tb.delta();
-        for m in &t.motions {
-            let mut elapsed = (j + 1) as f32 * dt;
-            if t.motion_change == MotionChangeFactor::PlayTime {
-                while elapsed < m.timing_sync_value {
-                    j += 1;
-                    elapsed += dt;
-                }
+        let schedule = talk_motion_schedule(t, frame, typing_start, per_char, length, self.tb);
+        for &(at, k) in &schedule {
+            let m = &t.motions[k];
+            let Some(name) = &m.motion else { continue };
+            if at == frame {
+                self.set_body(m.character, Some(name), frame);
+            } else if let Some(c) = self.chars.get_mut(&m.character) {
+                c.pending.push((at, name.clone()));
             }
-            if let Some(name) = &m.motion {
-                if j == 0 {
-                    self.set_body(m.character, Some(name), frame);
-                } else if let Some(c) = self.chars.get_mut(&m.character) {
-                    c.pending.push((frame + j, name.clone()));
-                }
-            }
-            j += 1;
         }
         self.timings.get_mut(&index).expect("started").talk = Some(TalkTiming {
             typing_start,
@@ -724,6 +721,7 @@ impl<'a> Scheduler<'a> {
             typing_end,
             voice_seconds: voice,
             opens_window,
+            motions: schedule,
         });
         Wait::TalkAuto {
             stage: TalkStage::Typing { typing_end },
@@ -830,6 +828,62 @@ fn fade_opacity_frames(tb: TimeBase, delay: f32) -> u32 {
     tb.frames_for(delay).max(1) + tb.frames_for(consts::CHARACTER_FADE_DURATION)
 }
 
+/// When the game plays each talk-embedded motion: (frame, index into `t.motions`).
+///
+/// `<SnippetActionTalk>d__224` walks `Motions` from `talkPlayMotionIndex = 0` and plays every
+/// leading motion whose `TimingSyncValue == 0` synchronously. The rest depend on
+/// `MotionChangeFrom`:
+/// - `PlayTime(1)`: `TalkMotionChangeSyncVoiceTime` is started in the same frame; each
+///   iteration adds `Time.deltaTime` first (so iteration k sees `(k + 1) · dt`) and plays at
+///   most one motion once `time >= TimingSyncValue`.
+/// - `Text(0)`: `OnTalkWindowOnLetter` (every `ShowWords` iteration) plays motions in order
+///   while `TimingSyncValue == GetVisibleWords().Length` (the `Substring` just shown).
+///   A value that is never hit exactly stops the chain.
+///
+/// `PlayTalkSnippetMotion` = `Model.ChangeAnimation(MotionName)` unless empty, then
+/// `ChangeModelFacial(FacialName)`. The finish (`StopTalkMotionTimingCoroutine`) drops the
+/// ones still waiting; callers do that at `Done`.
+fn talk_motion_schedule(
+    t: &Talk,
+    frame: u32,
+    typing_start: u32,
+    per_char: u32,
+    length: u32,
+    tb: TimeBase,
+) -> Vec<(u32, usize)> {
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < t.motions.len() && t.motions[k].timing_sync_value == 0.0 {
+        out.push((frame, k));
+        k += 1;
+    }
+    match t.motion_change {
+        MotionChangeFactor::PlayTime => {
+            let dt = tb.delta();
+            let mut time = 0.0f32;
+            let mut it = 0u32;
+            while k < t.motions.len() {
+                time += dt;
+                if time >= t.motions[k].timing_sync_value {
+                    out.push((frame + it, k));
+                    k += 1;
+                }
+                it += 1;
+            }
+        }
+        MotionChangeFactor::Text => {
+            for i in 0..length {
+                let visible = (i + 1) as f32;
+                while k < t.motions.len() && t.motions[k].timing_sync_value == visible {
+                    out.push((typing_start + i * per_char, k));
+                    k += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// `TMP_Text.SetArraySizes` (`TextMeshProUGUI` 0x4B52F90): before parsing, `characterInfo`
 /// is resized to exactly `m_InternalTextProcessingArraySize` when that is larger (never
 /// shrunk). That size is the UTF-32 length of the source text after
@@ -850,5 +904,41 @@ mod tests {
         assert_eq!(tmp_character_info_len(8, "\n0123456789"), 10);
         assert_eq!(tmp_character_info_len(38, "short"), 38);
         assert_eq!(tmp_character_info_len(8, "<b>ab</b>"), 9);
+    }
+
+    fn talk(change: MotionChangeFactor, values: &[f32]) -> Talk {
+        Talk {
+            speakers: vec![],
+            display_name: String::new(),
+            body: "0123456789".into(),
+            lip_sync: LipSyncMode::Text,
+            motion_change: change,
+            motions: values
+                .iter()
+                .map(|&v| TalkMotion { character: 1, motion: Some("m".into()), facial: None, timing_sync_value: v })
+                .collect(),
+            voices: vec![],
+            close_window_on_finish: false,
+            target_value_scale: 1.0,
+            attached_effect: None,
+            attached_sound: None,
+        }
+    }
+
+    #[test]
+    fn talk_motions_follow_the_game_schedule() {
+        let tb = TimeBase::new(60);
+        // leading zeros all play synchronously
+        let t = talk(MotionChangeFactor::PlayTime, &[0.0, 0.0, 0.0]);
+        assert_eq!(talk_motion_schedule(&t, 100, 112, 4, 10, tb), vec![(100, 0), (100, 1), (100, 2)]);
+        // PlayTime: one per coroutine iteration, `time` includes this frame's dt
+        let t = talk(MotionChangeFactor::PlayTime, &[0.0, 0.05, 0.01]);
+        let s = talk_motion_schedule(&t, 100, 112, 4, 10, tb);
+        assert_eq!(s[0], (100, 0));
+        assert_eq!(s[1].1, 1);
+        assert_eq!(s[2], (s[1].0 + 1, 2));
+        // Text: exact visible-length matches only; a miss stops the chain
+        let t = talk(MotionChangeFactor::Text, &[0.0, 1.0, 3.0, 2.0, 5.0]);
+        assert_eq!(talk_motion_schedule(&t, 100, 112, 4, 10, tb), vec![(100, 0), (112, 1), (120, 2)]);
     }
 }

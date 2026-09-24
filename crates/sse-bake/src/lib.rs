@@ -656,17 +656,12 @@ impl<'a> Baker<'a> {
                         }
                     }
                 }
-                for m in &t.motions {
-                    let at = match t.motion_change {
-                        MotionChangeFactor::PlayTime => f + self.tb.frames_for(m.timing_sync_value),
-                        MotionChangeFactor::Text => f,
-                    };
+                // the timeline's `talk_motion_schedule`; entries due now play in this frame
+                for &(at, k) in &tt.motions {
+                    let m = &t.motions[k];
                     if let Some(c) = self.chars.get_mut(&m.character) {
                         c.pending.push((at, m.motion.clone(), m.facial.clone()));
                     }
-                }
-                if !t.motions.is_empty() {
-                    note(&mut self.notes, "talk-embedded motions switch at TimingSyncValue seconds (PlayTime) or immediately (Text)");
                 }
                 if let Some(e) = &t.attached_effect {
                     self.effect(instr.index, e, f);
