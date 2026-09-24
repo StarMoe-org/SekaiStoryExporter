@@ -15,6 +15,7 @@
 //! `UnityEngine.Random` cannot be replayed, so the offsets come from the bake's seeded RNG: the
 //! shake has the game's amplitude, rhythm and decay, not its exact path.
 
+use sse_core::det_math::{cosf, sinf};
 use sse_core::rng::Rng;
 
 pub struct Shake {
@@ -64,11 +65,11 @@ impl Shake {
                     ang = ang - 180.0 + rng.range_f32(-randomness, randomness);
                 }
                 let r = ang.to_radians();
-                let (mut x, y) = (magnitude * r.cos(), magnitude * r.sin());
+                let (mut x, y) = (magnitude * cosf(r), magnitude * sinf(r));
                 if !ignore_z {
                     // `Quaternion.AngleAxis(q, Vector3.up) * v`: x turns into z, which the
                     // orthographic scenario camera does not see.
-                    x *= rng.range_f32(-randomness, randomness).to_radians().cos();
+                    x *= cosf(rng.range_f32(-randomness, randomness).to_radians());
                 }
                 tos.push([x, y]);
                 if fade_out {
