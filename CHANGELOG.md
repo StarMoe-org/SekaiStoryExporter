@@ -17,6 +17,8 @@ together with its fidelity impact.
 - 字号按 em 换算（此前 `ab_glyph` 行高口径导致字小约 30%）；正文自动字号从 44 起算
 - Telop 条与地点栏按 prefab 与动画 clip 重建（不再依赖第三方叠层）：Telop 展开/淡出曲线取自 `ac_scenario_telop_v2_*`，
   地点栏 0.2 s OutQuart 滑入，下一句台词结束时滑出
+- 动作混合的"同类别"判定改为二进制规则（类别 = `^[a-z]-\w+-\w+` 前缀，普通动作即完整名字；过渡动作 `A_to_B` 也按 0.125 s），
+  此前按名字第二段近似，会把同一角色的不同动作误判为同类别
 - 片尾影片按 ffmpeg 解码 `.m2v`，拉伸进居中的 2338×1080 `movieResolution` 矩形（此前是占位文字）
 - 参数表 v2：`FullScreenTextState`、`cinemascope`、`menu_alpha`、`TalkState.auto_time`、`MovieState`
 - **像素影响**：全片 UI、文字大小、角色位置、模糊强度均改变

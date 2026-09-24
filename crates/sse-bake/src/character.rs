@@ -138,10 +138,11 @@ impl CharacterRt {
         } else if face {
             self.fades.get(&clip.name).copied().unwrap_or(consts::FACIAL_FADE)
         } else {
-            let same_category = self
-                .animator
-                .current(layer)
-                .is_some_and(|cur| category(cur) == category(&clip.name));
+            // `ScenarioModel.ChangeMotionCore` (0x2063470): 0.125 s when either side is a link
+            // motion or both share a category; otherwise the clip's blend-in time (default 0.5)
+            let cur = self.animator.current(layer).unwrap_or("");
+            let same_category =
+                is_link_motion(cur) || is_link_motion(&clip.name) || category(cur) == category(&clip.name);
             if same_category {
                 consts::SAME_CATEGORY_BLEND
             } else {
@@ -183,8 +184,47 @@ impl CharacterRt {
     }
 }
 
-/// `GetCategoryName`: not reversed; approximated as the second `-`-separated token of the
-/// motion name (`w-<category>-<name>`).
+/// `ScenarioModel.GetCategoryName` (0x2063AF4): `Regex.Match(name, "^" + CATEGORY_NAME_RULE)`
+/// with `CATEGORY_NAME_RULE = "[a-z]{1}[-]{1}[a-zA-Z0-9]+[-]{1}[a-zA-Z0-9]+"`; empty when it does
+/// not match. For ordinary motions (`w-kanade-tilthead02`) the category is the whole name.
 fn category(name: &str) -> &str {
-    name.split('-').nth(1).unwrap_or(name)
+    match_rule(name).map_or("", |n| &name[..n])
+}
+
+/// `ScenarioModel.IsLinkMotion` (0x2062864): `^RULE_to_RULE$`.
+fn is_link_motion(name: &str) -> bool {
+    match_rule(name)
+        .and_then(|n| name[n..].strip_prefix("_to_"))
+        .and_then(|rest| match_rule(rest).map(|m| m == rest.len()))
+        .unwrap_or(false)
+}
+
+/// Length of the longest prefix matching `[a-z]-[a-zA-Z0-9]+-[a-zA-Z0-9]+` (greedy).
+fn match_rule(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    if b.len() < 5 || !b[0].is_ascii_lowercase() || b[1] != b'-' {
+        return None;
+    }
+    let word = |from: usize| from + b[from..].iter().take_while(|c| c.is_ascii_alphanumeric()).count();
+    let e1 = word(2);
+    if e1 == 2 || e1 >= b.len() || b[e1] != b'-' {
+        return None;
+    }
+    let e2 = word(e1 + 1);
+    (e2 > e1 + 1).then_some(e2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn category_is_the_rule_prefix() {
+        assert_eq!(category("w-kanade-tilthead02"), "w-kanade-tilthead02");
+        assert_eq!(category("w-normal-nod05_f"), "w-normal-nod05");
+        assert_eq!(category("face_normal_01"), "");
+        assert!(is_link_motion("w-a-b01_to_w-a-c02"));
+        assert!(!is_link_motion("w-a-b01_to_x"));
+        assert!(!is_link_motion("w-kanade-tilthead02"));
+    }
 }
