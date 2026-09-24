@@ -7,7 +7,7 @@
 | 语言 | Rust |
 | 渲染 | wgpu（macOS / Metal，Windows / DX12） |
 | 平台 | macOS (Apple Silicon)、Windows (NVIDIA) |
-| 状态 / Status | **设计阶段**，尚无实现代码 / design stage, no implementation yet |
+| 状态 / Status | **早期实现**：第一话可导出自动播放视频（近似项见导出报告） / early: episode 1 exports to video |
 | 许可 / Licence | AGPL-3.0-or-later + [Cubism Core 链接例外](LICENSE-EXCEPTION) |
 
 ## 支持矩阵
@@ -48,6 +48,28 @@
 | Live2D Cubism Core | Live2D 模型解析与变形（用户自行获取，见 ADR-0002） | ✅ |
 | .NET | 生成 L1 oracle fixture | 开发期 |
 | PlayCover + 游戏 | 采集 ground truth | 保真度工作 |
+
+## 使用（第一话导出）
+
+```sh
+# 1. 用 SekaiStoryRipper 导出剧情资产（需自备解密密钥）
+ripper --out <ripper-out> rip unit:school-refusal-story-chapter/1
+
+# 2. 准备（均由你自行获取，不随本仓库分发）
+#    - Live2D Cubism SDK for Native（接受其条款），设置 SSE_CUBISM_CORE_DIR=<sdk>/Core
+#    - --ui 目录：SourceHanSansSC-Medium.otf / -Bold.otf（思源黑体，SIL OFL），
+#      Dialogue_Background.png / SceneText_Background.png / SceneText_TopLeft.png（1920×1080 叠层，见决策 Q41）
+export SSE_CUBISM_CORE_DIR=/path/to/CubismSdkForNative/Core
+cargo build --release -p sse-cli
+
+# 3. 导出（需要 ffmpeg）
+./target/release/sse --library <ripper-out> export unit:school-refusal-story-chapter/1 \
+    -o out/ep1.mp4 --ui <ui-dir>
+# 单帧：sse ... render <selector> --frame 6500 -o f.png --ui <ui-dir>
+# 调试：sse ... inspect <selector>（IR）/ timeline <selector> / bake <selector>
+```
+
+导出旁会生成 `*.report.txt`，列出本次输出中所有近似与未支持项。
 
 ## 资产
 

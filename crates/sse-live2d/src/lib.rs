@@ -1,13 +1,32 @@
-//! # sse-live2d -- Cubism Core FFI and Framework reimplementation
+//! # sse-live2d -- Cubism Core FFI and Framework-layer reimplementation
 //!
 //! ## Responsibilities
 //! - FFI bindings to Cubism Core (decision Q1). **The only crate allowed to use `unsafe`**
-//! - Rust reimplementation of the Framework layer: motion, physics, expression, pose, eye blink
-//! - `trait MotionEvaluator` -- Native semantics is the first implementation; see `docs/risks.md` R1
-//! - model3 assembly: build a usable model from the scattered moc3 / physics3 / motion3 / textures
+//! - The game's runtime semantics in Rust (decision Q24): Unity `AnimationClip` playback with
+//!   `PlayableBlender` crossfades, the game's eye-blink controller, and Cubism physics as run by
+//!   the SDK for Unity 4.x
 //!
 //! ## Not responsible for
 //! - Drawing. This crate only produces vertices, indices and state; `sse-render` draws them
 //!
 //! ## Allowed dependencies
 //! `sse-core`, `sse-assets`.
+
+pub mod blink;
+pub mod core;
+pub mod motion;
+pub mod physics;
+
+pub use crate::core::{Model, Moc, core_version};
+
+/// Parameter ids the game looks up by name: old id first, new id as fallback (`live2d.md` §8).
+pub const PARAM_MOUTH_OPEN_Y: [&str; 2] = ["PARAM_MOUTH_OPEN_Y", "ParamMouthOpenY"];
+pub const PARAM_EYE_L_OPEN: [&str; 2] = ["PARAM_EYE_L_OPEN", "ParamEyeLOpen"];
+pub const PARAM_EYE_R_OPEN: [&str; 2] = ["PARAM_EYE_R_OPEN", "ParamEyeROpen"];
+pub const PARAM_BREATH: [&str; 2] = ["PARAM_BREATH", "ParamBreath"];
+
+pub fn find_param(ids: &[String], names: [&str; 2]) -> Option<usize> {
+    names
+        .iter()
+        .find_map(|n| ids.iter().position(|id| id == n))
+}

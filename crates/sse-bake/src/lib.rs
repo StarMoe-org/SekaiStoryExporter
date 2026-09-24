@@ -1,18 +1,848 @@
 //! # sse-bake -- Pass 1: state baking
 //!
-//! Walks the timeline sequentially, updating state only -- no rendering -- and emits a
-//! per-frame parameter table. Format spec: `docs/spec/param-table.md`.
+//! Walks the compiled timeline frame by frame, updating state only -- no rendering -- and
+//! emits the per-frame parameter table (`sse-params`). Behaviour references are the
+//! reverse-engineering documents under `docs/reverse/versions/cn-6.4.0/`; every place that
+//! is an approximation pushes a note into the table's report.
 //!
-//! ## Responsibilities
-//! - Drive the Live2D state machine, UI state, background and effect state
-//! - Emit a complete state snapshot per frame (the parameter table)
-//! - delta + zstd encoding
-//!
-//! ## Why this crate exists
-//! The parameter table is one intermediate layer that buys four things at once:
-//! observability (compare numerically against parameters dumped from the game),
-//! statelessness for Pass 2, parallel rendering, and timeline seeking.
-//! See `docs/architecture.md`.
-//!
-//! ## Not responsible for
-//! - Any GPU work
+//! Per frame the order is: snippet actions that take effect this frame (coroutines, i.e.
+//! `Update`), then the animator (motion + facial), eye blink, lip sync, breath, physics
+//! (`LateUpdate`), then the snapshot.
+
+mod character;
+mod lipsync;
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use sse_assets::Library;
+use sse_core::{TimeBase, consts, rng::Rng};
+use sse_ir::*;
+use sse_params::*;
+use sse_timeline::Timeline;
+
+use character::{CharacterRt, ModelInfo};
+
+#[derive(Debug, thiserror::Error)]
+pub enum BakeError {
+    #[error(transparent)]
+    Asset(#[from] sse_assets::AssetError),
+    #[error("{0}: {1}")]
+    Live2d(String, String),
+}
+
+#[derive(Debug, Clone)]
+pub struct BakeOptions {
+    /// UI content size (`ScreenManager.ContentSize`) for the output aspect ratio.
+    pub content_size: [f32; 2],
+    /// Seed for the game's `UnityEngine.Random` call sites (breath phase).
+    pub seed: u64,
+}
+
+pub fn bake(
+    lib: &Library,
+    ep: &Episode,
+    tl: &Timeline,
+    opts: &BakeOptions,
+) -> Result<ParamTable, BakeError> {
+    Baker::new(lib, ep, tl, opts).run()
+}
+
+struct Tween {
+    from: f32,
+    to: f32,
+    start: u32,
+    frames: u32,
+    ease_out_quad: bool,
+}
+
+impl Tween {
+    fn at(&self, frame: u32) -> f32 {
+        if self.frames == 0 || frame >= self.start + self.frames {
+            return self.to;
+        }
+        if frame <= self.start {
+            return self.from;
+        }
+        let mut t = (frame - self.start) as f32 / self.frames as f32;
+        if self.ease_out_quad {
+            t = -t * (t - 2.0);
+        }
+        self.from + (self.to - self.from) * t
+    }
+}
+
+struct Banner {
+    text: String,
+    start: u32,
+    end: u32,
+    fade: u32,
+}
+
+impl Banner {
+    fn state(&self, f: u32) -> Option<BannerState> {
+        if f < self.start || f >= self.end {
+            return None;
+        }
+        let a_in = if self.fade == 0 {
+            1.0
+        } else {
+            ((f - self.start) as f32 / self.fade as f32).min(1.0)
+        };
+        let a_out = if self.fade == 0 {
+            1.0
+        } else {
+            ((self.end - f) as f32 / self.fade as f32).min(1.0)
+        };
+        Some(BannerState {
+            text: self.text.clone(),
+            alpha: a_in.min(a_out),
+        })
+    }
+}
+
+struct Baker<'a> {
+    lib: &'a Library,
+    ep: &'a Episode,
+    tl: &'a Timeline,
+    opts: &'a BakeOptions,
+    tb: TimeBase,
+    rng: Rng,
+    models: Vec<String>,
+    model_info: BTreeMap<String, Arc<ModelInfo>>,
+    chars: BTreeMap<CharacterId, CharacterRt>,
+    /// Sibling order, back to front.
+    order: Vec<CharacterId>,
+    layout_mode: LayoutMode,
+    ambient: [f32; 4],
+    background: BackgroundState,
+    bg_tween: Option<Tween>,
+    fader: [f32; 4],
+    fader_from: [f32; 4],
+    fader_to: [f32; 4],
+    fader_tween: Option<Tween>,
+    blur: Option<Tween>,
+    blur_value: f32,
+    camera_color: Option<CameraColor>,
+    talk: Option<(u32, TalkState)>,
+    talk_window: Option<Tween>,
+    telop: Vec<Banner>,
+    place_info: Option<(String, u32)>,
+    full_text: Vec<Banner>,
+    movie: Option<(String, u32)>,
+    audio: Vec<AudioCue>,
+    bgm: Option<usize>,
+    se_loops: BTreeMap<String, usize>,
+    notes: Vec<String>,
+}
+
+fn note(notes: &mut Vec<String>, s: &str) {
+    if !notes.iter().any(|n| n == s) {
+        notes.push(s.to_owned());
+    }
+}
+
+impl<'a> Baker<'a> {
+    fn new(lib: &'a Library, ep: &'a Episode, tl: &'a Timeline, opts: &'a BakeOptions) -> Self {
+        Self {
+            lib,
+            ep,
+            tl,
+            opts,
+            tb: TimeBase::new(tl.fps),
+            rng: Rng::new(opts.seed),
+            models: Vec::new(),
+            model_info: BTreeMap::new(),
+            chars: BTreeMap::new(),
+            order: Vec::new(),
+            layout_mode: ep.initial.layout_mode,
+            ambient: consts::MODEL_COLOR_NORMAL,
+            background: BackgroundState {
+                current: ep.initial.background.as_ref().map(|b| b.0.clone()),
+                previous: None,
+                mix: 1.0,
+            },
+            bg_tween: None,
+            fader: [0.0; 4],
+            fader_from: [0.0; 4],
+            fader_to: [0.0; 4],
+            fader_tween: None,
+            blur: None,
+            blur_value: 0.0,
+            camera_color: None,
+            talk: None,
+            talk_window: None,
+            telop: Vec::new(),
+            place_info: None,
+            full_text: Vec::new(),
+            movie: None,
+            audio: Vec::new(),
+            bgm: None,
+            se_loops: BTreeMap::new(),
+            notes: tl.notes.clone(),
+        }
+    }
+
+    fn run(mut self) -> Result<ParamTable, BakeError> {
+        let instrs: BTreeMap<u32, &Instr> =
+            self.ep.instrs().into_iter().map(|i| (i.index, i)).collect();
+        let mut acts: Vec<(u32, u32)> = self.tl.instrs.values().map(|t| (t.act, t.index)).collect();
+        acts.sort();
+        let mut finishes: Vec<(u32, u32)> =
+            self.tl.instrs.values().map(|t| (t.finish, t.index)).collect();
+        finishes.sort();
+
+        if let Some(bgm) = &self.ep.initial.bgm {
+            self.play_bgm(bgm, 0, 0.0, 1.0);
+        }
+        for p in &self.ep.initial.layout {
+            self.appear(
+                p.character,
+                p.side,
+                p.offset_x,
+                p.costume.as_deref(),
+                p.motion.as_deref(),
+                p.facial.as_deref(),
+                0,
+                false,
+            )?;
+        }
+
+        let dt = self.tb.delta();
+        let mut frames = Vec::with_capacity(self.tl.end_frame as usize);
+        let (mut ai, mut fi) = (0, 0);
+        for f in 0..self.tl.end_frame {
+            while ai < acts.len() && acts[ai].0 == f {
+                let instr = instrs[&acts[ai].1];
+                self.act(instr, f)?;
+                ai += 1;
+            }
+            while fi < finishes.len() && finishes[fi].0 == f {
+                let instr = instrs[&finishes[fi].1];
+                self.finish(instr, f);
+                fi += 1;
+            }
+            self.scheduled_motions(f)?;
+            for c in self.chars.values_mut() {
+                c.late_update(f, dt, self.tb);
+            }
+            frames.push(self.snapshot(f));
+        }
+        // CleanupSounds(): fade everything out.
+        let end = self.tl.end_frame;
+        let fade = self.tb.frames_for(consts::CLEANUP_SOUND_FADE_TIME);
+        for cue in &mut self.audio {
+            if cue.stop_frame.is_none_or(|s| s > end) && cue.looping {
+                cue.stop_frame = Some(end);
+                cue.fade_out = fade.min(end.saturating_sub(cue.start_frame));
+            }
+        }
+        Ok(ParamTable {
+            version: PARAM_TABLE_VERSION,
+            fps: self.tl.fps,
+            models: self.models,
+            frames,
+            audio: self.audio,
+            notes: self.notes,
+        })
+    }
+
+    fn model_info(&mut self, bundle: &str) -> Result<(usize, Arc<ModelInfo>), BakeError> {
+        if !self.model_info.contains_key(bundle) {
+            let info = ModelInfo::load(self.lib, bundle)
+                .map_err(|e| BakeError::Live2d(bundle.to_owned(), e))?;
+            self.model_info.insert(bundle.to_owned(), Arc::new(info));
+            self.models.push(bundle.to_owned());
+        }
+        let idx = self.models.iter().position(|m| m == bundle).expect("pushed");
+        Ok((idx, self.model_info[bundle].clone()))
+    }
+
+    fn content(&self) -> [f32; 2] {
+        self.opts.content_size
+    }
+
+    /// `GetScenarioCharacterTransformData(side, offsetX)` (`layout.yaml`).
+    fn side_position(&self, side: Side, offset_x: f32) -> (f32, f32) {
+        let x_side = match self.layout_mode {
+            LayoutMode::Default => consts::SIDE_X_DEFAULT,
+            LayoutMode::Three => consts::SIDE_X_THREE,
+        };
+        let over_x = self.content()[0] * 0.5 + consts::OVER_POSITION_MARGIN;
+        let over_y = self.content()[1] * 0.5 + consts::OVER_POSITION_MARGIN;
+        use Side::*;
+        let x = match side {
+            Left | LeftInside | LeftUnder | LeftInsideUnder => -x_side,
+            Right | RightInside | RightUnder | RightInsideUnder => x_side,
+            LeftOver => -over_x,
+            RightOver => over_x,
+            _ => 0.0,
+        };
+        // `side_resolution`: y is 0 except for the *Under sides (`layout.yaml`).
+        let y = if matches!(
+            side,
+            LeftUnder | LeftInsideUnder | CenterUnder | RightUnder | RightInsideUnder
+        ) {
+            -over_y
+        } else {
+            0.0
+        };
+        (x + offset_x, y)
+    }
+
+    fn mode_scale(&self) -> f32 {
+        match self.layout_mode {
+            LayoutMode::Default => consts::MODE_SCALE_DEFAULT,
+            LayoutMode::Three => consts::MODE_SCALE_THREE,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn appear(
+        &mut self,
+        id: CharacterId,
+        side: Side,
+        offset_x: f32,
+        costume: Option<&str>,
+        motion: Option<&str>,
+        facial: Option<&str>,
+        frame: u32,
+        fade: bool,
+    ) -> Result<(), BakeError> {
+        let cast = self.ep.cast.get(&id);
+        let costume = costume
+            .map(str::to_owned)
+            .or_else(|| self.chars.get(&id).map(|c| c.costume.clone()))
+            .or_else(|| cast.and_then(|c| c.initial_costume.clone()));
+        let Some(costume) = costume else {
+            note(&mut self.notes, &format!("character {id}: no costume; not shown"));
+            return Ok(());
+        };
+        let model_bundle = cast
+            .and_then(|c| c.costumes.get(&costume))
+            .and_then(|c| c.model.clone());
+        let Some(model_bundle) = model_bundle else {
+            note(
+                &mut self.notes,
+                &format!("character {id}: costume {costume} has no model bundle (the game fails to load it too)"),
+            );
+            return Ok(());
+        };
+        let (model_index, info) = self.model_info(&model_bundle.0)?;
+        let breath_deg = self.rng.range_i32(0, 360) as f32;
+        let (x, y) = self.side_position(side, offset_x);
+        let scale = self.mode_scale();
+        let rt = match self.chars.remove(&id) {
+            Some(mut c) if c.costume == costume => {
+                c.x = Tween::fixed(x);
+                c.y = y;
+                c.scale = scale;
+                c
+            }
+            _ => CharacterRt::new(id, costume.clone(), model_index, info, breath_deg, x, y, scale),
+        };
+        self.chars.insert(id, rt);
+        self.order.retain(|c| *c != id);
+        self.order.push(id);
+        let c = self.chars.get_mut(&id).expect("inserted");
+        c.visible = true;
+        c.opacity = Tween {
+            from: 0.0,
+            to: 1.0,
+            start: frame,
+            frames: if fade {
+                self.tb.frames_for(consts::CHARACTER_FADE_DURATION)
+            } else {
+                0
+            },
+            ease_out_quad: false,
+        };
+        self.change_motion(id, motion, facial, true)?;
+        Ok(())
+    }
+
+    fn change_motion(
+        &mut self,
+        id: CharacterId,
+        motion: Option<&str>,
+        facial: Option<&str>,
+        first: bool,
+    ) -> Result<(), BakeError> {
+        let Some(c) = self.chars.get_mut(&id) else {
+            return Ok(());
+        };
+        let table = self
+            .ep
+            .cast
+            .get(&id)
+            .and_then(|cast| cast.costumes.get(&c.costume))
+            .map(|x| &x.motions);
+        for (name, face) in [(motion, false), (facial, true)] {
+            let Some(name) = name else { continue };
+            let Some(path) = table.and_then(|t| t.get(name)) else {
+                // the game keeps the previous motion on this layer
+                continue;
+            };
+            let clip = c.clip(self.lib, &path.0).map_err(|e| BakeError::Live2d(path.0.clone(), e))?;
+            c.play(clip, face, first);
+        }
+        Ok(())
+    }
+
+    fn scheduled_motions(&mut self, f: u32) -> Result<(), BakeError> {
+        let due: Vec<(CharacterId, Option<String>, Option<String>)> = self
+            .chars
+            .values_mut()
+            .flat_map(|c| {
+                let (now, later): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut c.pending).into_iter().partition(|p| p.0 <= f);
+                c.pending = later;
+                now.into_iter().map(|p| (c.id, p.1, p.2)).collect::<Vec<_>>()
+            })
+            .collect();
+        for (id, m, fa) in due {
+            self.change_motion(id, m.as_deref(), fa.as_deref(), false)?;
+        }
+        Ok(())
+    }
+
+    fn fade_color(&mut self, to: [f32; 4], from: Option<[f32; 4]>, frame: u32, seconds: f32) {
+        self.fader_from = from.unwrap_or(self.fader);
+        self.fader_to = to;
+        self.fader_tween = Some(Tween {
+            from: 0.0,
+            to: 1.0,
+            start: frame,
+            frames: self.tb.frames_for(seconds),
+            ease_out_quad: false,
+        });
+    }
+
+    fn hide_talk_window(&mut self, frame: u32) {
+        if self.talk.is_some() {
+            let a = self.talk_window.as_ref().map_or(1.0, |t| t.at(frame));
+            self.talk_window = Some(Tween {
+                from: a,
+                to: 0.0,
+                start: frame,
+                frames: self.tb.frames_for(consts::TALK_WINDOW_FADE_DURATION),
+                ease_out_quad: false,
+            });
+        }
+    }
+
+    fn play_bgm(&mut self, a: &AudioRef, frame: u32, fade: f32, volume: f32) {
+        let fade_frames = self.tb.frames_for(fade);
+        if let Some(prev) = self.bgm {
+            let cue = &mut self.audio[prev];
+            if cue.stop_frame.is_none() {
+                cue.stop_frame = Some(frame + fade_frames);
+                cue.fade_out = fade_frames;
+            }
+        }
+        self.audio.push(AudioCue {
+            files: a.files.iter().map(|f| f.0.clone()).collect(),
+            start_frame: frame,
+            stop_frame: None,
+            looping: true,
+            volume,
+            fade_in: fade_frames,
+            fade_out: 0,
+            kind: AudioKind::Bgm,
+        });
+        self.bgm = Some(self.audio.len() - 1);
+    }
+
+    fn one_shot(&mut self, a: &AudioRef, frame: u32, volume: f32, kind: AudioKind) {
+        self.audio.push(AudioCue {
+            files: a.files.iter().map(|f| f.0.clone()).collect(),
+            start_frame: frame,
+            stop_frame: None,
+            looping: false,
+            volume,
+            fade_in: 0,
+            fade_out: 0,
+            kind,
+        });
+    }
+
+    fn sound(&mut self, ops: &[SoundOp], f: u32) {
+        for op in ops {
+            match op {
+                SoundOp::Bgm { bgm, fade, volume, name } => match bgm {
+                    Some(a) => {
+                        let a = a.clone();
+                        self.play_bgm(&a, f, *fade, *volume);
+                    }
+                    None => note(&mut self.notes, &format!("BGM {name} not found")),
+                },
+                SoundOp::SeOneShot { se, volume, deferred, name } => match se {
+                    Some(a) => {
+                        let a = a.clone();
+                        let at = f + self.tb.frames_for(*deferred);
+                        if *deferred > 0.0 {
+                            note(&mut self.notes, "SE with Duration > 0: callback not reversed, played after the duration");
+                        }
+                        self.one_shot(&a, at, *volume, AudioKind::Se);
+                    }
+                    None => note(&mut self.notes, &format!("SE {name} not found")),
+                },
+                SoundOp::SeLoop { se, fade, volume, name } => {
+                    if let Some(&i) = self.se_loops.get(name) {
+                        self.audio[i].volume = *volume;
+                        note(&mut self.notes, "SpecialSePlay volume fades are applied as steps");
+                    } else if let Some(a) = se {
+                        self.audio.push(AudioCue {
+                            files: a.files.iter().map(|x| x.0.clone()).collect(),
+                            start_frame: f,
+                            stop_frame: None,
+                            looping: true,
+                            volume: *volume,
+                            fade_in: self.tb.frames_for(*fade),
+                            fade_out: 0,
+                            kind: AudioKind::Se,
+                        });
+                        self.se_loops.insert(name.clone(), self.audio.len() - 1);
+                    }
+                }
+                SoundOp::Stop { se, bgm, fade } => {
+                    let frames = self.tb.frames_for(*fade);
+                    if let Some(i) = self.se_loops.remove(se) {
+                        self.audio[i].stop_frame = Some(f + frames);
+                        self.audio[i].fade_out = frames;
+                    } else if !bgm.is_empty()
+                        && let Some(i) = self.bgm.take() {
+                            self.audio[i].stop_frame = Some(f + frames);
+                            self.audio[i].fade_out = frames;
+                        }
+                }
+                SoundOp::BgmVolume { .. } | SoundOp::BgmAisacVolume { .. } | SoundOp::BgmBlock { .. } => {
+                    note(&mut self.notes, "BGM volume / AISAC / block changes are not applied yet");
+                }
+                SoundOp::Nothing => {}
+            }
+        }
+    }
+
+    fn act(&mut self, instr: &Instr, f: u32) -> Result<(), BakeError> {
+        let timing = &self.tl.instrs[&instr.index];
+        match &instr.kind {
+            InstrKind::Wait => {}
+            InstrKind::Talk(t) => {
+                if self.talk.is_none() || self.talk_window.as_ref().is_some_and(|w| w.to == 0.0) {
+                    self.talk_window = Some(Tween {
+                        from: 0.0,
+                        to: 1.0,
+                        start: f,
+                        frames: self.tb.frames_for(consts::TALK_WINDOW_FADE_DURATION),
+                        ease_out_quad: false,
+                    });
+                }
+                self.talk = Some((
+                    instr.index,
+                    TalkState {
+                        name: t.display_name.clone(),
+                        body: t.body.clone(),
+                        visible: 0,
+                        window_alpha: 1.0,
+                    },
+                ));
+                for s in &t.speakers {
+                    if self.chars.contains_key(s) {
+                        self.order.retain(|c| c != s);
+                        self.order.push(*s);
+                    }
+                }
+                let tt = timing.talk.clone().expect("talk timing");
+                for v in &t.voices {
+                    if let Some(a) = &v.voice {
+                        self.one_shot(a, f, v.volume, AudioKind::Voice);
+                        if t.lip_sync == LipSyncMode::Voice {
+                            let pcm = lipsync::load_mono(self.lib, a)?;
+                            if let Some(c) = self.chars.get_mut(&v.character) {
+                                c.lip = lipsync::Lip::voice(pcm, f, v.character, t.target_value_scale);
+                            }
+                        }
+                    }
+                }
+                if t.lip_sync == LipSyncMode::Text {
+                    for s in &t.speakers {
+                        if let Some(c) = self.chars.get_mut(s) {
+                            c.lip = lipsync::Lip::text(tt.clone());
+                        }
+                    }
+                }
+                for m in &t.motions {
+                    let at = match t.motion_change {
+                        MotionChangeFactor::PlayTime => f + self.tb.frames_for(m.timing_sync_value),
+                        MotionChangeFactor::Text => f,
+                    };
+                    if let Some(c) = self.chars.get_mut(&m.character) {
+                        c.pending.push((at, m.motion.clone(), m.facial.clone()));
+                    }
+                }
+                if !t.motions.is_empty() {
+                    note(&mut self.notes, "talk-embedded motions switch at TimingSyncValue seconds (PlayTime) or immediately (Text)");
+                }
+                if let Some(e) = &t.attached_effect {
+                    self.effect(instr.index, e, f);
+                }
+                if let Some(s) = &t.attached_sound {
+                    self.sound(s, f);
+                }
+            }
+            InstrKind::Layout(l) => match &l.op {
+                LayoutOp::Appear { from, offset_x, costume, motion, facial, depth } => {
+                    self.appear(
+                        l.character,
+                        *from,
+                        *offset_x,
+                        costume.as_deref(),
+                        motion.as_deref(),
+                        facial.as_deref(),
+                        f,
+                        true,
+                    )?;
+                    self.depth(l.character, *depth);
+                }
+                LayoutOp::Move { to, offset_x, duration } => {
+                    let (x, y) = self.side_position(*to, *offset_x);
+                    let frames = self.tb.frames_for(*duration);
+                    if let Some(c) = self.chars.get_mut(&l.character) {
+                        let cur = c.x.at(f);
+                        c.x = Tween { from: cur, to: x, start: f, frames, ease_out_quad: false };
+                        c.y = y;
+                    }
+                }
+                LayoutOp::Hide => {
+                    let frames = self.tb.frames_for(consts::CHARACTER_FADE_DURATION);
+                    if let Some(c) = self.chars.get_mut(&l.character) {
+                        let cur = c.opacity.at(f);
+                        c.opacity = Tween { from: cur, to: 0.0, start: f, frames, ease_out_quad: false };
+                        c.hide_at = Some(f + frames);
+                    }
+                }
+                LayoutOp::Shake { .. } => note(&mut self.notes, "character shake not rendered"),
+                LayoutOp::Depth { depth } => self.depth(l.character, *depth),
+            },
+            InstrKind::ChangeMotion { character, motion, facial } => {
+                self.change_motion(*character, motion.as_deref(), facial.as_deref(), false)?;
+            }
+            InstrKind::Effect(e) => self.effect(instr.index, e, f),
+            InstrKind::Sound { ops } => self.sound(ops, f),
+            InstrKind::SetLayoutMode { mode } => {
+                self.layout_mode = *mode;
+                note(&mut self.notes, "layout mode changes apply to later placements only");
+            }
+            InstrKind::Unsupported(u) => {
+                if let UnsupportedReason::Movie { name, files } = &u.reason {
+                    self.hide_talk_window(f);
+                    self.movie = Some((name.clone(), timing.finish));
+                    if let Some(w) = files.iter().find(|x| x.0.ends_with(".wav")) {
+                        let a = AudioRef { cue: name.clone(), files: vec![w.clone()] };
+                        self.one_shot(&a, f, 1.0, AudioKind::Movie);
+                    }
+                    // `PlayMovie` hides every appearing character first.
+                    for c in self.chars.values_mut() {
+                        c.visible = false;
+                    }
+                    note(&mut self.notes, "movies are not decoded yet: a placeholder is shown (audio plays)");
+                } else {
+                    note(&mut self.notes, &format!("unsupported snippet: {:?}", u.reason));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn depth(&mut self, id: CharacterId, depth: DepthType) {
+        match depth {
+            DepthType::Front => {
+                self.order.retain(|c| *c != id);
+                self.order.push(id);
+            }
+            DepthType::Back => {
+                self.order.retain(|c| *c != id);
+                self.order.insert(0, id);
+            }
+            _ => {}
+        }
+    }
+
+    fn finish(&mut self, instr: &Instr, f: u32) {
+        if let InstrKind::Talk(t) = &instr.kind {
+            self.place_info = None;
+            for c in self.chars.values_mut() {
+                c.lip.end_text(f);
+            }
+            if t.close_window_on_finish {
+                self.hide_talk_window(f);
+            }
+        }
+    }
+
+    fn effect(&mut self, index: u32, e: &Effect, f: u32) {
+        let timing = &self.tl.instrs[&index];
+        let d = e.duration;
+        match &e.op {
+            EffectOp::Fade { color, dir } => {
+                let rgb = match color {
+                    FadeColor::Black => [0.0, 0.0, 0.0],
+                    FadeColor::White => [1.0, 1.0, 1.0],
+                };
+                match dir {
+                    // In: reveal from an opaque colour
+                    Direction::In => self.fade_color(
+                        [rgb[0], rgb[1], rgb[2], 0.0],
+                        Some([rgb[0], rgb[1], rgb[2], 1.0]),
+                        f,
+                        d,
+                    ),
+                    // Out: from the current colour to opaque
+                    Direction::Out => {
+                        self.hide_talk_window(f);
+                        let from = if self.fader[3] == 0.0 {
+                            [rgb[0], rgb[1], rgb[2], 0.0]
+                        } else {
+                            self.fader
+                        };
+                        self.fade_color([rgb[0], rgb[1], rgb[2], 1.0], Some(from), f, d);
+                    }
+                }
+                note(&mut self.notes, "ColorFader is drawn above characters and below the talk window (layer not reversed)");
+            }
+            EffectOp::ChangeBackground { background, .. } => {
+                let new = background.as_ref().map(|b| b.0.clone());
+                self.background.previous = self.background.current.take();
+                self.background.current = new;
+                let frames = self.tb.frames_for(d);
+                self.bg_tween = Some(Tween { from: 0.0, to: 1.0, start: f, frames, ease_out_quad: false });
+            }
+            EffectOp::Telop { text } => {
+                self.hide_talk_window(f);
+                let fade = self.tb.frames_for(consts::TELOP_ANIM_CLIP_LENGTH);
+                self.telop.push(Banner { text: text.clone(), start: f, end: timing.finish, fade });
+                note(&mut self.notes, "telop show/hide animations approximated as alpha fades");
+            }
+            EffectOp::PlaceInfo { text } => {
+                self.place_info = Some((text.clone(), f));
+            }
+            EffectOp::FullScreenText { text, voice, .. } => {
+                self.hide_talk_window(f);
+                let fade = self.tb.frames_for(consts::SCENARIO_FADE_TIME);
+                self.full_text.push(Banner { text: text.clone(), start: f, end: timing.finish, fade });
+                if let Some(a) = voice {
+                    let a = a.clone();
+                    self.one_shot(&a, f, 1.0, AudioKind::Voice);
+                }
+                note(&mut self.notes, "FullScreenText layout approximated (centred white text)");
+            }
+            EffectOp::Blur { dir } => {
+                let (from, to) = match dir {
+                    Direction::In => (self.blur_value, 1.0),
+                    Direction::Out => (self.blur_value, 0.0),
+                };
+                self.blur = Some(Tween { from, to, start: f, frames: self.tb.frames_for(d), ease_out_quad: true });
+                note(&mut self.notes, "camera blur strength approximated (iteration/size not reversed)");
+            }
+            EffectOp::CameraColor { effect } => {
+                self.camera_color = Some(match effect {
+                    CameraColorEffect::Sepia => CameraColor {
+                        mono: [0.298_912, 0.586_611, 0.114_478, 1.0],
+                        tone: [1.07, 0.74, 0.43, 1.0],
+                        influence: 0.75,
+                    },
+                    CameraColorEffect::Flashback => CameraColor {
+                        mono: [0.5, 0.5, 0.5, 1.0],
+                        tone: [0.5, 0.5, 0.5, 1.0],
+                        influence: 0.5,
+                    },
+                });
+            }
+            EffectOp::CameraColorOff => self.camera_color = None,
+            EffectOp::Ambient { color } => {
+                self.ambient = match color {
+                    AmbientColor::Afternoon => consts::MODEL_COLOR_NORMAL,
+                    AmbientColor::Evening => consts::MODEL_COLOR_EVENING,
+                    AmbientColor::Night => consts::MODEL_COLOR_NIGHT,
+                };
+            }
+            EffectOp::SekaiTransition { .. } => {
+                note(&mut self.notes, "Sekai transition particles not rendered (timing approximated)");
+            }
+            EffectOp::Noop => {}
+            other => note(&mut self.notes, &format!("effect not rendered: {other:?}")),
+        }
+    }
+
+    fn snapshot(&mut self, f: u32) -> FrameState {
+        if let Some(t) = &self.bg_tween {
+            self.background.mix = t.at(f);
+            if f >= t.start + t.frames {
+                self.background.previous = None;
+                self.bg_tween = None;
+            }
+        }
+        if let Some(t) = &self.fader_tween {
+            let k = t.at(f);
+            for i in 0..4 {
+                self.fader[i] = self.fader_from[i] + (self.fader_to[i] - self.fader_from[i]) * k;
+            }
+        }
+        if let Some(b) = &self.blur {
+            self.blur_value = b.at(f);
+        }
+        let mut characters = Vec::new();
+        for id in &self.order {
+            let Some(c) = self.chars.get_mut(id) else { continue };
+            if c.hide_at.is_some_and(|h| f >= h) {
+                c.visible = false;
+                c.hide_at = None;
+            }
+            if !c.visible {
+                continue;
+            }
+            characters.push(CharacterState {
+                character: c.id,
+                model: c.model,
+                opacity: c.opacity.at(f),
+                x: c.x.at(f),
+                y: c.y,
+                scale: c.scale,
+                color: self.ambient,
+                params: c.values.clone(),
+            });
+        }
+        let talk = self.talk.as_ref().map(|(index, t)| {
+            let visible = self.tl.instrs[index].talk.as_ref().map_or(0, |tt| tt.visible_at(f));
+            TalkState {
+                name: t.name.clone(),
+                body: t.body.clone(),
+                visible,
+                window_alpha: self.talk_window.as_ref().map_or(1.0, |w| w.at(f)),
+            }
+        });
+        let movie = match &self.movie {
+            Some((name, end)) if f < *end => Some(name.clone()),
+            _ => None,
+        };
+        FrameState {
+            background: self.background.clone(),
+            characters,
+            fader: self.fader,
+            blur: self.blur_value,
+            camera_color: self.camera_color,
+            talk: talk.filter(|t| t.window_alpha > 0.0),
+            telop: self.telop.iter().find_map(|b| b.state(f)),
+            place_info: self.place_info.as_ref().map(|(t, _)| BannerState { text: t.clone(), alpha: 1.0 }),
+            full_screen_text: self.full_text.iter().find_map(|b| b.state(f)),
+            movie,
+        }
+    }
+}
+
+impl Tween {
+    fn fixed(v: f32) -> Self {
+        Tween { from: v, to: v, start: 0, frames: 0, ease_out_quad: false }
+    }
+}

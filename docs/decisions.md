@@ -3,7 +3,7 @@
 > 本文件是项目的单一事实来源。任何与此冲突的代码或文档以本文件为准。
 > 决策变更时**追加修订条目**，不要原地覆盖——历史上下文本身有价值。
 
-状态：v3（Round 1–7 完成）
+状态：v4（Round 1–8 完成）
 
 ---
 
@@ -169,6 +169,29 @@ PlayCover 的原生分辨率 = 窗口点数 × `customScaler`（默认 1920×108
 | Q37 | IR 持久化（IR-6） | Rust 类型 + 带 `ir_version` 的调试 JSON（`sse inspect`），**不承诺稳定外部格式** | 改 IR 即 bump 版本、更新 golden，不做旧版兼容 |
 | Q38 | 人工覆盖（IR-7） | **v1 不做**，1:1 复刻（含游戏自身数据错误） | 如 CostumeType `"3"` → 与游戏同样加载失败 |
 | Q39 | `{{playerName}}`（IR-8） | 配置 `player_name`，**默认 `「世界」的居民`**，`--player-name` 覆盖 | 替换在 IR 构建时完成（对应 `CreateFinalSerifBody`） |
+
+#### Q34 修订（2026-09-24）· 模拟帧率 = 60
+
+open-question #40 已静态回答（[`reverse/notes/2026-09-24-frame-rate.md`](reverse/notes/2026-09-24-frame-rate.md)）：
+剧情沿用 UI 的 `targetFrameRate`，常规为 **60**，且游戏每个逻辑帧渲染一帧（`vSyncCount = 0`，无锁帧、无时间缩放）。
+
+| 决策 | 后果 |
+|---|---|
+| 模拟帧率取常量 `frame.story_target_frame_rate = 60` | 进入 `sse_core::consts`；导出 60 fps 时一个模拟帧对应一个导出帧（游戏的帧同步策略即「每逻辑帧一帧」） |
+| 刷新率非 60 倍数时的 80 / 72 fps 分支不建模 | ground truth 采集时须保证 PlayCover 取到 60 Hz 倍数的刷新率 |
+
+### Round 8 · 第一话导出（2026-09-24）
+
+目标：`unit:school-refusal-story-chapter/1` 能导出自动播放视频（「预览第一部分」）。
+
+| # | 议题 | 决策 | 关键后果 |
+|---|---|---|---|
+| Q40 | Cubism Core 的获取 | 用户自行下载 Cubism SDK for Native 并接受条款；构建时用 `SSE_CUBISM_CORE_DIR` 指向其 `Core/` | 仓库与发布物不含 Core；`sse-live2d/build.rs` 缺变量时给出明确报错 |
+| Q41 | 对话框 / Telop / 地点栏贴图 | **暂用第三方现成资源**（[SEKAI-Stories](https://github.com/lezzthanthree/SEKAI-Stories) 的 1920×1080 全屏叠层，作者声明资产仅限个人/教育用途），由用户放进 `--ui` 目录 | 非游戏原贴图，属近似；原贴图与九宫格参数仍待从 ipa 抽取（open-question #44） |
+| Q42 | 第一版文字渲染 | **先直接光栅化思源黑体 SC**（Medium / Bold），按 `text.md` 的字号、行距、auto-size、描边层近似 | Q11 的 TMP SDF 路线后续替换；导出报告标注 |
+| — | 模拟帧率 | 60（Q34 修订） | 导出 60 fps，一个模拟帧对应一个视频帧 |
+
+所有近似都会写进导出旁的 `*.report.txt`，不静默。
 
 ---
 

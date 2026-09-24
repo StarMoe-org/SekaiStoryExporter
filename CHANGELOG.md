@@ -8,6 +8,15 @@ together with its fidelity impact.
 
 ## [Unreleased]
 
+### 新增 / Added（2026-09-24，第一话导出）
+- 完整链路：`sse-assets`（读 Ripper 输出）→ `sse-scenario`（剧本 → IR v1）→ `sse-timeline`（60 fps 逐帧复刻协程调度）
+  → `sse-bake`（Unity 语义动作/表情线性混合、眨眼事件、口型、呼吸、物理 → 参数表）→ `sse-render`（wgpu：背景 cover、
+  每角色 2304×1536 RT + `UI/Default` 二次乘 alpha 合成、遮罩、色幕、模糊、相机色调、对话框与文字）→ `sse-export`（离线混音 + ffmpeg H.264）
+- 新 crate `sse-params`（参数表类型）；Cubism Core FFI（`sse-live2d`，`SSE_CUBISM_CORE_DIR`）
+- CLI：`sse inspect | timeline | bake | render | export`
+- **像素影响**：首个渲染实现。已知近似（角色纵向锚定、第三方 UI 叠层、光栅化文字、遮罩分辨率等）逐条写入导出报告
+- Added the full export pipeline; `unit:school-refusal-story-chapter/1` renders to a 1080p60 MP4.
+
 ### 变更 / Changed
 - 项目改名为 **SekaiStoryExporter**（缩写 `sse`）：13 个 crate 由 `pjsk-*` 改为 `sse-*`，
   Rust 路径 `pjsk_core` → `sse_core`，CLI 子命令写作 `sse <cmd>`。无像素影响（决策 Q23）

@@ -6,7 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+libm = "0.2"
 
+[dev-dependencies]
+yaml-rust2 = "0.10"
 
 [lints]
 workspace = true

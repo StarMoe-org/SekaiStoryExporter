@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "sse"
+path = "src/main.rs"
+
 [dependencies]
 sse-core = { path = "../sse-core" }
 sse-ir = { path = "../sse-ir" }
@@ -12,9 +16,13 @@ sse-assets = { path = "../sse-assets" }
 sse-scenario = { path = "../sse-scenario" }
 sse-timeline = { path = "../sse-timeline" }
 sse-bake = { path = "../sse-bake" }
+sse-params = { path = "../sse-params" }
 sse-render = { path = "../sse-render" }
 sse-export = { path = "../sse-export" }
 sse-fidelity = { path = "../sse-fidelity" }
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+serde_json = "1"
 
 [lints]
 workspace = true

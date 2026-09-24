@@ -9,8 +9,13 @@ license.workspace = true
 sse-core = { path = "../sse-core" }
 sse-assets = { path = "../sse-assets" }
 sse-live2d = { path = "../sse-live2d" }
-sse-ugui = { path = "../sse-ugui" }
 sse-text = { path = "../sse-text" }
+sse-params = { path = "../sse-params" }
+wgpu = "30"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+thiserror = "2"
 
 [lints]
 workspace = true
