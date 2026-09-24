@@ -116,6 +116,10 @@ pub struct VideoOptions {
     pub height: u32,
     pub ffmpeg: PathBuf,
     pub crf: u32,
+    /// Encode at this size (ffmpeg Lanczos downscale from the render size). Rendering at the
+    /// device's native resolution and scaling down reproduces a capture of a high-resolution
+    /// device: resolution-dependent effects such as the camera blur keep their on-screen size.
+    pub output_size: Option<(u32, u32)>,
     /// Render only frames in this range.
     pub range: std::ops::Range<u32>,
 }
@@ -140,6 +144,10 @@ pub fn export_video(
         .args(["-r", &table.fps.to_string(), "-i", "-"])
         .arg("-i")
         .arg(&wav)
+        .args(match opts.output_size {
+            Some((w, h)) => vec!["-vf".to_owned(), format!("scale={w}:{h}:flags=lanczos")],
+            None => Vec::new(),
+        })
         .args(["-c:v", "libx264", "-preset", "medium", "-crf", &opts.crf.to_string()])
         .args(["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest"])
         .arg(&opts.output)

@@ -68,6 +68,10 @@ enum Command {
         crf: u32,
         #[arg(long, default_value = "ffmpeg")]
         ffmpeg: PathBuf,
+        /// Encode at this size, e.g. 1920x1080, after rendering at --width/--height (e.g. render
+        /// 3840x2160 to match a 4K device capture such as PlayCover's).
+        #[arg(long, value_parser = parse_size)]
+        output_size: Option<(u32, u32)>,
         #[command(flatten)]
         out: OutputArgs,
     },
@@ -129,6 +133,11 @@ impl OutputArgs {
     }
 }
 
+fn parse_size(text: &str) -> Result<(u32, u32), String> {
+    let (w, h) = text.split_once('x').ok_or("expected WIDTHxHEIGHT")?;
+    Ok((w.parse().map_err(|_| "bad width")?, h.parse().map_err(|_| "bad height")?))
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let lib = Library::open(&cli.library);
@@ -160,7 +169,7 @@ fn main() -> Result<()> {
             sse_export::write_png(output, out.width, out.height, rgba)?;
             println!("wrote {}", output.display());
         }
-        Command::Export { selector, output, from, to, crf, ffmpeg, out } => {
+        Command::Export { selector, output, from, to, crf, ffmpeg, output_size, out } => {
             let table = bake(&lib, selector, &opts, out.config())?;
             let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&cli.library))?;
             r.set_ffmpeg(ffmpeg.clone());
@@ -172,6 +181,7 @@ fn main() -> Result<()> {
                 height: out.height,
                 ffmpeg: ffmpeg.clone(),
                 crf: *crf,
+                output_size: *output_size,
                 range,
             };
             let step = table.fps * 10;
