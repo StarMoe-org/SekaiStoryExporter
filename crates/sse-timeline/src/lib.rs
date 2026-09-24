@@ -554,7 +554,8 @@ impl<'a> Scheduler<'a> {
                         until: frame + self.tb.frames_for(consts::AUTO_NEXT_PAGE_DELAY),
                     },
                     Some(voice) => {
-                        let voice_end = timing.act + self.tb.frames_for(voice);
+                        // `OnFinishVoice` fires on the frame CRI reports Removed
+                        let voice_end = timing.act + self.tb.frames_for(voice + consts::VOICE_END_LATENCY);
                         if frame >= voice_end {
                             TalkStage::Gate {
                                 wait: consts::AUTO_NEXT_PAGE_DELAY,
@@ -771,7 +772,7 @@ impl<'a> Scheduler<'a> {
         t += self.fst_slots * per_slot;
         let text_end = t;
         // do { t += dt; if (t >= 10) break; yield; } while (!isVoiceFinish)
-        let voice_end = voice.map(|a| text_start + tb.frames_for(self.durations.of(a)));
+        let voice_end = voice.map(|a| text_start + tb.frames_for(self.durations.of(a) + consts::VOICE_END_LATENCY));
         t = match voice_end {
             Some(v) if v > t + 1 => v.min(t + tb.frames_for(consts::FST_VOICE_TIMEOUT)),
             _ => t + 1,
