@@ -64,9 +64,21 @@ pub const BLUR_MAX_SPREAD: f32 = 3.0;
 pub const MOVIE_RESOLUTION: [f32; 2] = [2338.0, 1080.0];
 /// `ScreenSlideInOut.<Play>d__7` (0x16EB2B4): `DOAnchorPos(to, 0.2)` + `SetEase(OutQuart)`.
 pub const PLACE_INFO_SLIDE_DURATION: f32 = 0.2;
-/// `ScenarioPlaceInfo.DefaultPosX = −(rt.position.x + rect.width)`; the panel is 580 wide and
-/// its world x is taken as 0 (the root canvas' world mapping is not reversed).
-pub const PLACE_INFO_HIDDEN_X: f32 = -580.0;
+/// `UILayer/TopLeft2/PlaceInfo` width (`resources.assets|60657`, pivot (0, 1), anchored x 0).
+pub const PLACE_INFO_WIDTH: f32 = 580.0;
+/// `CanvasRoot/UICamera` (`level*|Camera`): orthographic, size 1; the root canvas is
+/// Screen Space - Camera, centred on the camera at world x 0.
+pub const UI_CAMERA_ORTHO_SIZE: f32 = 1.0;
+
+/// `ScenarioPlaceInfo.DefaultPosX = −(rt.position.x + rect.width)`: a *world* x plus a
+/// reference-pixel width. `Reset` and `Hide` both evaluate it while the panel sits at
+/// anchored x 0, i.e. with its pivot on the canvas' left edge: world x
+/// `−ortho × content_w / content_h` (canvas height spans `2 × ortho` world units).
+/// 16:9 → −(580 − 1.778) = −578.22.
+pub fn place_info_hidden_x(content_size: [f32; 2]) -> f32 {
+    let left = -UI_CAMERA_ORTHO_SIZE * content_size[0] / content_size[1];
+    -(left + PLACE_INFO_WIDTH)
+}
 /// SekaiIn (20 / 40): `ColorFader.Set(white)` then fades to transparent after this delay.
 pub const SEKAI_IN_FADE_DELAY: f32 = 0.25;
 /// SekaiOut (21 / 41): fades to opaque white after this delay (with the particle prefab).
@@ -234,6 +246,8 @@ mod tests {
         check("sekai.in_fade_delay", SEKAI_IN_FADE_DELAY);
         check("sekai.out_fade_delay", SEKAI_OUT_FADE_DELAY);
         check("talk.window_open_close_duration", TALK_WINDOW_OPEN_CLOSE_DURATION);
+        check("place_info.width", PLACE_INFO_WIDTH);
+        check("ui.camera_ortho_size", UI_CAMERA_ORTHO_SIZE);
         check("sekai_transition.lifetime", SEKAI_TRANSITION_LIFETIME);
         check("live2d.body_motion_fade", BODY_MOTION_FADE);
         check("live2d.facial_fade", FACIAL_FADE);
@@ -241,6 +255,12 @@ mod tests {
         check("live2d.scale_reference_height", LIVE2D_SCALE_REFERENCE_HEIGHT);
         check("screen.outside_fill_offset_x", OUTSIDE_FILL_OFFSET_X);
         check("frame.story_target_frame_rate", STORY_TARGET_FRAME_RATE as f32);
+    }
+
+    #[test]
+    fn place_info_hidden_x_uses_the_canvas_world_edge() {
+        let x = place_info_hidden_x([1920.0, 1080.0]);
+        assert!((x - (-(580.0 - 16.0 / 9.0))).abs() < 1e-4, "{x}");
     }
 
     #[test]

@@ -88,6 +88,8 @@ struct PlaceInfoRt {
     start: u32,
     status: PlaceStatus,
     reserve_close: bool,
+    /// `DefaultPosX` ([`consts::place_info_hidden_x`]).
+    hidden_x: f32,
 }
 
 impl PlaceInfoRt {
@@ -115,7 +117,7 @@ impl PlaceInfoRt {
 
     fn start_slide_out(&mut self, f: u32) {
         self.from = self.to;
-        self.to = consts::PLACE_INFO_HIDDEN_X;
+        self.to = self.hidden_x;
         self.start = f;
         self.status = PlaceStatus::SlideOut;
     }
@@ -809,7 +811,8 @@ impl<'a> Baker<'a> {
             }
             EffectOp::PlaceInfo { text } => {
                 // `ScenarioPlaceInfo.Show`: from the current x (after `Reset`, DefaultPosX) to 0
-                let from = self.place_info.as_ref().map_or(consts::PLACE_INFO_HIDDEN_X, |p| p.x_at(f, self.tb));
+                let hidden_x = consts::place_info_hidden_x(self.opts.content_size);
+                let from = self.place_info.as_ref().map_or(hidden_x, |p| p.x_at(f, self.tb));
                 self.place_info = Some(PlaceInfoRt {
                     text: text.clone(),
                     from,
@@ -817,6 +820,7 @@ impl<'a> Baker<'a> {
                     start: f,
                     status: PlaceStatus::SlideIn,
                     reserve_close: false,
+                    hidden_x,
                 });
             }
             EffectOp::FullScreenText { text, voice, .. } => {
