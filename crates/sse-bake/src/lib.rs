@@ -864,7 +864,8 @@ impl<'a> Baker<'a> {
                     c.hide_at = Some(start + frames);
                 }
             }
-            LayoutOp::Shake { .. } => note(&mut self.notes, "character shake not rendered"),
+            // the shake moves an empty child of the model view: nothing visible
+            LayoutOp::Shake { .. } => {}
             LayoutOp::Depth { depth } => self.depth(l.character, *depth),
         }
         Ok(())

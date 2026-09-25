@@ -298,8 +298,13 @@ pub enum LayoutOp {
     Hide {
         delay: f32,
     },
+    /// Types 4 / 5 (`SetCharacterShake`): `DOShakePosition` on the model view's
+    /// `shakeTargetObject`, an empty child ("shake") that nothing renders, so nothing moves on
+    /// screen; the snippet finishes after `duration` (MoveSpeedType 0: 0.5 s, 1: 0.75 s,
+    /// else 0.25 s).
     Shake {
         axis: Axis,
+        duration: f32,
         raw: serde_json::Value,
     },
     Depth {

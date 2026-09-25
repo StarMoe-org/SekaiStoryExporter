@@ -458,6 +458,11 @@ impl Parser<'_> {
             },
             4 | 5 => LayoutOp::Shake {
                 axis: if l.kind == 4 { Axis::X } else { Axis::Y },
+                duration: match l.move_speed_type {
+                    0 => 0.5,
+                    1 => 0.75,
+                    _ => 0.25,
+                },
                 raw: serde_json::to_value(l).unwrap_or_default(),
             },
             6 => LayoutOp::Depth { depth },

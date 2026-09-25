@@ -717,10 +717,8 @@ impl<'a> Scheduler<'a> {
                     then: Next::ReleaseBusy(l.character),
                 };
             }
-            LayoutOp::Shake { .. } => {
-                self.note_once("layout Shake duration not reversed; finishes immediately");
-                0.0
-            }
+            // `OnFinishShakeCharacter` → `FinishSnippet` when the shake tween completes
+            LayoutOp::Shake { duration, .. } => *duration,
             LayoutOp::Depth { .. } => 0.0,
         };
         Wait::Until {
@@ -875,12 +873,6 @@ impl<'a> Scheduler<'a> {
                 None
             }
             _ => None,
-        }
-    }
-
-    fn note_once(&mut self, note: &str) {
-        if !self.notes.iter().any(|n| n == note) {
-            self.notes.push(note.to_owned());
         }
     }
 }
