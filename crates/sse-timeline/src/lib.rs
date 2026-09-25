@@ -858,6 +858,11 @@ impl<'a> Scheduler<'a> {
         match &e.op {
             Fade { .. } | ChangeBackground { .. } | Blur { .. } | SideFade { .. } => Some(d),
             CameraMove { .. } | CameraZoom { .. } => Some(d),
+            // `ShowSimpleSelectable`: with two or more options the dialog waits for the player
+            // (the export answers after `EXPORT_CHOICE_WAIT`), then `WaitDelay(0.5)`
+            SimpleSelectable { options } if options.len() > 1 => {
+                Some(consts::EXPORT_CHOICE_WAIT + consts::ANSWER_FINISH_DELAY)
+            }
             Telop { .. } => Some(consts::TELOP_ANIM_CLIP_LENGTH * 2.0 + consts::TELOP_AUTO_HOLD)
                 .map(|_| {
                     // frame-accurate: two clip plays + the hold loop, each rounded separately

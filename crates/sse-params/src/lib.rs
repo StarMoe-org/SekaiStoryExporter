@@ -66,10 +66,20 @@ pub struct FrameState {
     /// characters, effects) scaled by `zoom` about the screen centre. `None` = identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraView>,
+    /// Effect 23: the `AnswerChoiceDialog` while open (its `windowObject` scale).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<ChoiceState>,
     /// `ScenarioSideFadePlayer` while active: its `anchoredPosition` (reference-canvas pixels,
     /// +y up; zero = covering the screen).
     #[serde(default)]
     pub side_fade: Option<[f32; 2]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChoiceState {
+    /// Answer texts; `Answer0` is the right-hand button, `Answer1` the left.
+    pub options: Vec<String>,
+    pub scale: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

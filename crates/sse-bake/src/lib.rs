@@ -322,6 +322,8 @@ struct Baker<'a> {
     dolly_blur: EaseTween,
     dolly_distortion: EaseTween,
     dolly_material: bool,
+    /// Effect 23: (options, open frame, answer frame).
+    choice: Option<(Vec<String>, u32, u32)>,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
     notes: Vec<String>,
@@ -386,6 +388,7 @@ impl<'a> Baker<'a> {
             dolly_blur: EaseTween::fixed(0.0),
             dolly_distortion: EaseTween::fixed(0.0),
             dolly_material: false,
+            choice: None,
             bgm: None,
             se_loops: BTreeMap::new(),
             notes: tl.notes.clone(),
@@ -1197,6 +1200,16 @@ impl<'a> Baker<'a> {
             }
             // `backgroundImage.material = on ? Resources "Materials/UI/UIGaussianBlur" : null`
             EffectOp::BackgroundBlur { on } => self.background.blur = *on,
+            EffectOp::SimpleSelectable { options } => {
+                if options.len() > 1 {
+                    let answer = f + self.tb.frames_for(consts::EXPORT_CHOICE_WAIT);
+                    self.choice = Some((options.clone(), f, answer));
+                    note(
+                        &mut self.notes,
+                        "choices (effect 23): the first answer is picked 1.5 s after the dialog opens (player input); SE_UI_CHOICES_DECIDE is not played",
+                    );
+                }
+            }
             EffectOp::DollyZoom {
                 zoom,
                 blur,
@@ -1364,7 +1377,6 @@ impl<'a> Baker<'a> {
             EffectOp::StopShakeScreen => self.screen_shake = None,
             EffectOp::StopShakeWindow => self.window_shake = None,
             EffectOp::Noop => {}
-            other => note(&mut self.notes, &format!("effect not rendered: {other:?}")),
         }
     }
 
@@ -1582,6 +1594,20 @@ impl<'a> Baker<'a> {
             scenario_shake: self.screen_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
             window_shake: self.window_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
             side_fade: self.side_fade.as_ref().and_then(|s| s.at(f)),
+            choice: self.choice.as_ref().and_then(|(options, open, answer)| {
+                let n = self.tb.frames_for(consts::DIALOG_SCALE_DURATION).max(1) as f32;
+                let scale = if f < *open {
+                    return None;
+                } else if f < *answer {
+                    ((f - open) as f32 / n).min(1.0)
+                } else {
+                    1.0 - (f - answer) as f32 / n
+                };
+                (scale > 0.0).then(|| ChoiceState {
+                    options: options.clone(),
+                    scale,
+                })
+            }),
             camera: {
                 let v = CameraView {
                     x: self.camera_move[0].at(f),

@@ -383,6 +383,11 @@ impl Renderer {
             self.native.menu(&mut plan.ui, k, frame.menu_alpha);
         }
         native_ui::cinemascope(&mut plan.ui_top, k, w, h, frame.cinemascope);
+        // `AnswerChoiceDialog` on the dialog layer (above the scenario UI)
+        let choice_rects = frame.choice.as_ref().map(|c| {
+            self.native
+                .choice(&mut plan.ui_top, k, [w, h], c.options.len(), c.scale)
+        });
         let telop_text = frame
             .telop
             .as_ref()
@@ -390,7 +395,7 @@ impl Renderer {
         if let Some(p) = &frame.place_info {
             self.native.place_info(&mut plan.ui, k, p.x);
         }
-        plan.text = Some(self.text_canvas(frame, k, telop_text)?);
+        plan.text = Some(self.text_canvas(frame, k, telop_text, choice_rects.as_deref())?);
         if let Some(p) = frame.side_fade {
             self.side_fade(&mut plan.cover, k, content, p);
         }
@@ -595,9 +600,10 @@ impl Renderer {
         frame: &FrameState,
         k: f32,
         telop: Option<(f32, f32)>,
+        choice: Option<&[[f32; 4]]>,
     ) -> Result<gpu::ImageId, RenderError> {
         let key = format!(
-            "{:?}|{:?}|{:?}|{:?}|{}",
+            "{:?}|{:?}|{:?}|{:?}|{}|{:?}",
             frame.talk.as_ref().map(|t| {
                 let s = frame.window_shake;
                 (
@@ -626,7 +632,11 @@ impl Renderer {
                 ""
             } else {
                 m.name.as_str()
-            })
+            }),
+            frame
+                .choice
+                .as_ref()
+                .map(|c| (&c.options, (c.scale * 256.0) as u32))
         );
         if self.text_key.as_deref() == Some(key.as_str()) {
             return Ok(self.gpu.text_image());
@@ -776,6 +786,39 @@ impl Renderer {
                 b.alpha,
                 &|i| (progress - i as f32).clamp(0.0, 1.0),
             );
+        }
+        if let (Some(c), Some(rects)) = (&frame.choice, choice) {
+            use native_ui::layout as l;
+            let style = sse_text::Style {
+                size: l::ANSWER_TEXT_SIZE * c.scale,
+                min_size: 1.0,
+                auto_size: true,
+                line_spacing: 0.0,
+                color: l::ANSWER_TEXT_COLOR,
+                outline: None,
+                underlay: None,
+                char_spacing: 0.0,
+            };
+            for (text, r) in c.options.iter().zip(rects) {
+                let inset = l::ANSWER_TEXT_INSET * c.scale * k;
+                sse_text::draw(
+                    &mut canvas,
+                    &self.name_font,
+                    text,
+                    u32::MAX,
+                    sse_text::Frame {
+                        x: r[0] + inset,
+                        y: r[1],
+                        width: (r[2] - inset * 2.0) / k,
+                        height: r[3] / k,
+                        scale: k,
+                        align: 0.5,
+                        valign: 0.5,
+                    },
+                    &style,
+                    1.0,
+                );
+            }
         }
         if let Some(m) = frame.movie.as_ref().filter(|m| m.file.is_none()) {
             let msg = format!("[movie: {}]", m.name);
