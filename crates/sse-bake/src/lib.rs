@@ -601,6 +601,56 @@ impl<'a> Baker<'a> {
         Ok(())
     }
 
+    /// `CheckAndChangeCostume` for a loaded character wearing another costume:
+    /// `FadeOpacity(0, 0, 0)` (one frame, then opacity 0) whose callback sets the display
+    /// status to Hide, and `ChangeCostume` swaps the model in the same view.
+    fn change_costume(&mut self, id: CharacterId, costume: &str, f: u32) -> Result<(), BakeError> {
+        let Some(old) = self.chars.get(&id) else {
+            return Ok(());
+        };
+        if old.costume == costume {
+            return Ok(());
+        }
+        let model_bundle = self
+            .ep
+            .cast
+            .get(&id)
+            .and_then(|c| c.costumes.get(costume))
+            .and_then(|c| c.model.clone());
+        let Some(model_bundle) = model_bundle else {
+            note(
+                &mut self.notes,
+                &format!("character {id}: costume {costume} has no model bundle"),
+            );
+            return Ok(());
+        };
+        let (model_index, info) = self.model_info(&model_bundle.0)?;
+        let old = self.chars.remove(&id).expect("checked");
+        let breath_deg = self.rng.range_i32(0, 360) as f32;
+        let mut rt = CharacterRt::new(
+            id,
+            costume.to_owned(),
+            model_index,
+            info,
+            breath_deg,
+            old.x.at(f),
+            old.y,
+            old.scale,
+        );
+        // one frame of the old model at its opacity, then nothing
+        rt.visible = old.visible;
+        rt.hide_at = Some(f + 1);
+        rt.opacity = Tween {
+            from: old.opacity.at(f),
+            to: 0.0,
+            start: f + 1,
+            frames: 0,
+            ease_out_quad: false,
+        };
+        self.chars.insert(id, rt);
+        Ok(())
+    }
+
     fn change_motion(
         &mut self,
         id: CharacterId,
@@ -938,6 +988,9 @@ impl<'a> Baker<'a> {
                 }
             }
             InstrKind::Layout(l) => {
+                if let Some(costume) = &l.costume {
+                    self.change_costume(l.character, costume, f)?;
+                }
                 if l.motion.is_some() || l.facial.is_some() {
                     self.change_motion(
                         l.character,

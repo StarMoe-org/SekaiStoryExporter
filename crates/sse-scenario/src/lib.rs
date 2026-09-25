@@ -479,23 +479,21 @@ impl Parser<'_> {
                 });
             }
         };
-        let (motion, facial) = if matches!(op, LayoutOp::Appear { .. }) {
-            (None, None)
+        let (motion, facial, costume) = if matches!(op, LayoutOp::Appear { .. }) {
+            (None, None, None)
         } else {
-            if !l.costume_type.is_empty() {
-                self.diags.push(Diagnostic::IgnoredField {
-                    index: pos,
-                    field: "LayoutData.CostumeType (not Appear)".into(),
-                    value: l.costume_type.clone(),
-                });
-            }
-            (opt(&l.motion_name), opt(&l.facial_name))
+            (
+                opt(&l.motion_name),
+                opt(&l.facial_name),
+                opt(&l.costume_type),
+            )
         };
         InstrKind::Layout(Layout {
             character,
             op,
             motion,
             facial,
+            costume,
         })
     }
 

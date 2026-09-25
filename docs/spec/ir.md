@@ -1,6 +1,6 @@
-# IR 规约 v3
+# IR 规约 v4
 
-> **状态：v3（2026-09-25）。** 依据 [ADR-0008](../adr/0008-ir.md)。v2 → v3：`Layout` 增加 `motion` / `facial`，任何布局类型都会先换动作与表情（`SnippetActionCharacterLayout` 在类型分支之前执行）；出场仍由 `Appear` 自带。
+> **状态：v4（2026-09-26）。** 依据 [ADR-0008](../adr/0008-ir.md)。v3 → v4：`Layout` 增加 `costume`（非出场类型的换装：`CheckAndChangeCostume` 隐藏角色并换模型）；`LayoutOp::Shake` 增加 `duration`；新增 `EffectOp::DollyZoom`（日服特效 45）。v2 → v3：`Layout` 增加 `motion` / `facial`，任何布局类型都会先换动作与表情（`SnippetActionCharacterLayout` 在类型分支之前执行）；出场仍由 `Appear` 自带。
 
 IR（Intermediate Representation，中间表示）是 `sse-scenario`（解析）与 `sse-timeline`（调度模拟）之间的接缝：
 

@@ -692,7 +692,14 @@ impl<'a> Scheduler<'a> {
         let InstrKind::Layout(l) = &instrs[pos].kind else {
             unreachable!("layout_body on non-layout")
         };
-        // The motion change comes before the type branch (see `Layout::motion`).
+        // `CheckAndChangeCostume`, then the motion change, before the type branch (see
+        // `Layout::costume` / `Layout::motion`).
+        if let (Some(costume), Some(c)) = (&l.costume, self.chars.get_mut(&l.character))
+            && c.costume.as_deref() != Some(costume.as_str())
+        {
+            c.costume = Some(costume.clone());
+            c.shown = false;
+        }
         if l.motion.is_some() {
             self.set_body(l.character, l.motion.as_deref(), frame);
         }

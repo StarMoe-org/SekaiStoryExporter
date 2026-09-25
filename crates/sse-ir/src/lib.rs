@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub const IR_VERSION: u32 = 3;
+pub const IR_VERSION: u32 = 4;
 
 pub type CharacterId = i32;
 
@@ -273,6 +273,10 @@ pub struct Layout {
     pub motion: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facial: Option<String>,
+    /// `CheckAndChangeCostume` (every type but `Appear`, which keeps its own): a different
+    /// costume hides the character and swaps its model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub costume: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
