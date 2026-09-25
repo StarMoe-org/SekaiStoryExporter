@@ -122,7 +122,7 @@ pub struct FxState {
     pub seed: u32,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackgroundState {
     pub current: Option<String>,
     /// Crossfade source and the weight of `current` in [0, 1].
@@ -131,6 +131,34 @@ pub struct BackgroundState {
     /// `backgroundImage.material` = `Materials/UI/UIGaussianBlur` (effect 44 "true").
     #[serde(default)]
     pub blur: bool,
+    /// Effect 45: `backgroundImage.parent` scale (about the screen centre), 1 = none.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub scale: f32,
+    /// Effect 45: `backgroundImage.material` = `Materials/UI/UIDollyZoomEffect` with
+    /// `[_SamplingDistance, _DistortionStrength]` (it replaces the blur material).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dolly: Option<[f32; 2]>,
+}
+
+impl Default for BackgroundState {
+    fn default() -> Self {
+        Self {
+            current: None,
+            previous: None,
+            mix: 0.0,
+            blur: false,
+            scale: 1.0,
+            dolly: None,
+        }
+    }
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+fn is_one(v: &f32) -> bool {
+    *v == 1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

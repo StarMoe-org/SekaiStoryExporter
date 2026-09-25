@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use sse_assets::Library;
-use sse_core::{TimeBase, consts, rng::Rng};
+use sse_core::{TimeBase, consts, ease::Ease, rng::Rng};
 use sse_ir::*;
 use sse_params::*;
 use sse_timeline::Timeline;
@@ -56,6 +56,53 @@ struct Tween {
     frames: u32,
     ease_out_quad: bool,
 }
+
+/// A DOTween with an explicit ease (`SetEase`).
+#[derive(Debug, Clone, Copy)]
+struct EaseTween {
+    from: f32,
+    to: f32,
+    start: u32,
+    frames: u32,
+    ease: Ease,
+}
+
+impl EaseTween {
+    fn fixed(v: f32) -> Self {
+        Self {
+            from: v,
+            to: v,
+            start: 0,
+            frames: 0,
+            ease: Ease::Linear,
+        }
+    }
+
+    fn at(&self, f: u32) -> f32 {
+        if self.frames == 0 || f >= self.start + self.frames {
+            return self.to;
+        }
+        if f <= self.start {
+            return self.from;
+        }
+        let t = (f - self.start) as f32 / self.frames as f32;
+        self.from + (self.to - self.from) * self.ease.at(t)
+    }
+
+    /// `Kill(complete: true)` on the running tween, then a new one from its end value.
+    fn restart(&mut self, to: f32, start: u32, frames: u32, ease: Ease) {
+        *self = Self {
+            from: self.to,
+            to,
+            start,
+            frames,
+            ease,
+        };
+    }
+}
+
+/// `UnityEngine.Mathf.Epsilon` (`float.Epsilon`, the smallest subnormal).
+const MATHF_EPSILON: f32 = 1e-45;
 
 /// How long a stopped effect stays in the frame state; the renderer drops it as soon as
 /// `WaitAllStop` would destroy it (no live particle, Stop clip over).
@@ -269,6 +316,12 @@ struct Baker<'a> {
     /// `ScenarioStudioCamera.cameraMoveTweener` (x, y) and `cameraZoomTweener`.
     camera_move: [Tween; 2],
     camera_zoom: Tween,
+    /// Effect 45: `dollyZoomTweener` (background parent scale), `dollyZoomBlurTweener`,
+    /// `dollyZoomDistortionTweener`, and whether the dolly material is on the background.
+    dolly_scale: EaseTween,
+    dolly_blur: EaseTween,
+    dolly_distortion: EaseTween,
+    dolly_material: bool,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
     notes: Vec<String>,
@@ -299,7 +352,7 @@ impl<'a> Baker<'a> {
                 current: ep.initial.background.as_ref().map(|b| b.0.clone()),
                 previous: None,
                 mix: 1.0,
-                blur: false,
+                ..BackgroundState::default()
             },
             bg_tween: None,
             fader: [0.0; 4],
@@ -329,6 +382,10 @@ impl<'a> Baker<'a> {
             bgm_volume: Vec::new(),
             camera_move: [Tween::fixed(0.0), Tween::fixed(0.0)],
             camera_zoom: Tween::fixed(1.0),
+            dolly_scale: EaseTween::fixed(1.0),
+            dolly_blur: EaseTween::fixed(0.0),
+            dolly_distortion: EaseTween::fixed(0.0),
+            dolly_material: false,
             bgm: None,
             se_loops: BTreeMap::new(),
             notes: tl.notes.clone(),
@@ -1086,6 +1143,12 @@ impl<'a> Baker<'a> {
             }
             // `backgroundImage.material = on ? Resources "Materials/UI/UIGaussianBlur" : null`
             EffectOp::BackgroundBlur { on } => self.background.blur = *on,
+            EffectOp::DollyZoom {
+                zoom,
+                blur,
+                dist,
+                ease,
+            } => self.dolly_zoom(*zoom, *blur, *dist, ease, f, d),
             EffectOp::Blur { dir } => {
                 let (from, to) = match dir {
                     Direction::In => (self.blur_value, 1.0),
@@ -1251,6 +1314,53 @@ impl<'a> Baker<'a> {
         }
     }
 
+    /// Effect 45 (JP `SnippetActionSpecialEffect` case 45).
+    fn dolly_zoom(
+        &mut self,
+        zoom: Option<f32>,
+        blur: Option<f32>,
+        dist: Option<f32>,
+        ease: &str,
+        f: u32,
+        d: f32,
+    ) {
+        // "Zoom is required": the game logs an error and ends the snippet
+        let Some(zoom) = zoom else { return };
+        // `Enum.TryParse<Ease>(StringValSub, true)`, else `Ease.Linear`
+        let ease = if ease.trim().is_empty() {
+            Ease::Linear
+        } else {
+            Ease::parse(ease).unwrap_or_else(|| {
+                note(
+                    &mut self.notes,
+                    &format!("dolly zoom ease {ease:?} approximated as Linear"),
+                );
+                Ease::Linear
+            })
+        };
+        let frames = self.tb.frames_for(d);
+        // `backgroundImage.transform.parent.DOScale(zoom, Duration).SetEase(ease)`
+        self.dolly_scale.restart(zoom, f, frames, ease);
+        // `CalcDistortionStrength`, `ShouldClearBlur`
+        let distortion = match dist {
+            Some(dist) => dist * -(zoom - 1.0),
+            None => 0.0,
+        };
+        let has_blur = blur.is_some_and(|b| b > MATHF_EPSILON);
+        let no_distortion = dist.is_none() || distortion.abs() <= MATHF_EPSILON;
+        if !has_blur && no_distortion {
+            // kill both, zero the floats, give the background back its previous material
+            self.dolly_blur = EaseTween::fixed(0.0);
+            self.dolly_distortion = EaseTween::fixed(0.0);
+            self.dolly_material = false;
+        } else {
+            self.dolly_material = true;
+            self.dolly_blur
+                .restart(blur.unwrap_or(0.0), f, frames, ease);
+            self.dolly_distortion.restart(distortion, f, frames, ease);
+        }
+    }
+
     /// `SpecialEffectChangeCharacterShader` (see `hologram`).
     fn character_shader(&mut self, id: CharacterId, shader: &str, bundle: &str, f: u32) {
         let kind = match shader {
@@ -1383,7 +1493,13 @@ impl<'a> Baker<'a> {
             _ => None,
         };
         FrameState {
-            background: self.background.clone(),
+            background: BackgroundState {
+                scale: self.dolly_scale.at(f),
+                dolly: self
+                    .dolly_material
+                    .then(|| [self.dolly_blur.at(f), self.dolly_distortion.at(f)]),
+                ..self.background.clone()
+            },
             characters,
             fader: self.fader,
             blur: self.blur_value,

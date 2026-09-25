@@ -239,11 +239,12 @@ impl Renderer {
                 1.0
             };
             let q = gpu::QuadDraw::image(id, bg_rect, [1.0, 1.0, 1.0, a]);
-            plan.scene.push(if frame.background.blur {
-                q.with_blur(consts::UI_GAUSSIAN_BLUR_SAMPLING_DISTANCE)
-            } else {
-                q
-            });
+            plan.scene
+                .push(match (frame.background.dolly, frame.background.blur) {
+                    (Some([sampling, distortion]), _) => q.with_dolly(sampling, distortion),
+                    (None, true) => q.with_blur(consts::UI_GAUSSIAN_BLUR_SAMPLING_DISTANCE),
+                    (None, false) => q,
+                });
         }
 
         // 2. characters (in order, each composited right after its RT render)
@@ -272,6 +273,18 @@ impl Renderer {
             });
         }
 
+        // effect 45 scales `backgroundImage.parent` (full screen, centre pivot)
+        let bs = frame.background.scale;
+        if bs != 1.0 {
+            let xf = gpu::ScreenXf {
+                center: [w * 0.5, h * 0.5],
+                zoom: bs,
+                offset: [0.0, 0.0],
+            };
+            for q in &mut plan.scene {
+                q.transform(&xf);
+            }
+        }
         // `ScenarioRoot` (background, characters, effects) on screen: ShakeScreen moves it
         // (canvas pixels, +y up), CameraZoom scales it about the centre and CameraMove moves
         // the studio camera the other way

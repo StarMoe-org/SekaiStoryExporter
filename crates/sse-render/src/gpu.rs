@@ -68,12 +68,20 @@ pub struct QuadDraw {
     premultiplied: bool,
     /// `Sekai/UI/UIGaussianBlur` with this `_SamplingDistance` (texels).
     blur: Option<f32>,
+    /// `Sekai/UI/UIDollyZoomEffect` with `[_SamplingDistance, _DistortionStrength]`.
+    dolly: Option<[f32; 2]>,
 }
 
 impl QuadDraw {
     /// Draws with the `UIGaussianBlur` material.
     pub fn with_blur(mut self, sampling_distance: f32) -> Self {
         self.blur = Some(sampling_distance);
+        self
+    }
+
+    /// Draws with the `UIDollyZoomEffect` material.
+    pub fn with_dolly(mut self, sampling_distance: f32, distortion: f32) -> Self {
+        self.dolly = Some([sampling_distance, distortion]);
         self
     }
 
@@ -90,6 +98,7 @@ impl QuadDraw {
             color,
             premultiplied: false,
             blur: None,
+            dolly: None,
         }
     }
     pub fn image_uv(id: ImageId, rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) -> Self {
@@ -100,6 +109,7 @@ impl QuadDraw {
             color,
             premultiplied: false,
             blur: None,
+            dolly: None,
         }
     }
     pub fn solid(rect: [f32; 4], color: [f32; 4]) -> Self {
@@ -110,6 +120,7 @@ impl QuadDraw {
             color,
             premultiplied: false,
             blur: None,
+            dolly: None,
         }
     }
 }
@@ -866,14 +877,18 @@ impl Gpu {
                         target: [
                             w,
                             h,
-                            match (q.blur, q.premultiplied) {
-                                (Some(_), _) => 3.0,
-                                (None, true) => 1.0,
-                                (None, false) => 0.0,
+                            match (q.dolly, q.blur, q.premultiplied) {
+                                (Some(_), _, _) => 5.0,
+                                (None, Some(_), _) => 3.0,
+                                (None, None, true) => 1.0,
+                                (None, None, false) => 0.0,
                             },
                             0.0,
                         ],
-                        extra: [q.blur.unwrap_or(0.0), 0.0, 0.0, 0.0],
+                        extra: match (q.dolly, q.blur) {
+                            (Some([sd, dist]), _) => [sd, dist, 0.0, 0.0],
+                            (None, b) => [b.unwrap_or(0.0), 0.0, 0.0, 0.0],
+                        },
                     },
                 )
             })
@@ -1259,6 +1274,7 @@ impl Gpu {
                 color: [1.0; 4],
                 premultiplied: true,
                 blur: None,
+                dolly: None,
             }]));
         }
         ui.extend(self.quads(&plan.cover));

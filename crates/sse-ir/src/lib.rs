@@ -379,6 +379,14 @@ pub enum EffectOp {
     Blur {
         dir: Direction,
     },
+    /// Effect 45 (JP): `DollyZoomParams` from "Zoom: z, Blur: b, Dist: d" and the DOTween
+    /// ease name in `StringValSub`. Without `zoom` the game logs an error and does nothing.
+    DollyZoom {
+        zoom: Option<f32>,
+        blur: Option<f32>,
+        dist: Option<f32>,
+        ease: String,
+    },
     BackgroundBlur {
         on: bool,
     },

@@ -640,6 +640,30 @@ impl Parser<'_> {
             43 => CameraZoom {
                 scale: single_try_parse(&e.string_val),
             },
+            45 => {
+                // `DollyZoomParams(string)`: '：' → ':', split ',', then "key:value" pairs,
+                // keys compared ignoring case, values via `float.TryParse`
+                let (mut zoom, mut blur, mut dist) = (None, None, None);
+                for part in e.string_val.replace('：', ":").split(',') {
+                    let kv: Vec<&str> = part.split(':').collect();
+                    if kv.len() != 2 {
+                        continue;
+                    }
+                    let v = kv[1].trim().parse::<f32>().ok();
+                    match kv[0].trim().to_ascii_lowercase().as_str() {
+                        "zoom" => zoom = v,
+                        "blur" => blur = v,
+                        "dist" => dist = v,
+                        _ => {}
+                    }
+                }
+                DollyZoom {
+                    zoom,
+                    blur,
+                    dist,
+                    ease: e.string_val_sub.clone(),
+                }
+            }
             44 => BackgroundBlur {
                 on: bool_try_parse(&e.string_val),
             },

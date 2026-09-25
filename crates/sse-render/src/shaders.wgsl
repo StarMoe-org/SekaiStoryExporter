@@ -92,6 +92,29 @@ fn quad_vs(@builtin(vertex_index) vi: u32) -> QuadOut {
 
 @fragment
 fn quad_fs(i: QuadOut) -> @location(0) vec4<f32> {
+    if (quad.dst.z > 4.5) {
+        // Sekai/UI/UIDollyZoomEffect: barrel distortion of the raw UV about the centre,
+        // uv' = 0.5 + d·(1 + _DistortionStrength·|d|²), clamped to [0, 1]; then, when
+        // _SamplingDistance > 0.001, the UIGaussianBlur cross with every tap clamped.
+        let d = i.uv - vec2<f32>(0.5);
+        let uv = clamp(d * (1.0 + quad.extra.y * dot(d, d)) + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+        var c3 = vec4<f32>(0.0);
+        if (quad.extra.x > 0.001) {
+            let texel = 1.0 / vec2<f32>(textureDimensions(quad_tex));
+            let sy = vec2<f32>(0.0, texel.y * quad.extra.x);
+            let sx = vec2<f32>(texel.x * quad.extra.x, 0.0);
+            let w = array<f32, 7>(0.036, 0.113, 0.216, 0.269, 0.216, 0.113, 0.036);
+            for (var k = 0; k < 7; k = k + 1) {
+                let o = f32(k - 3);
+                c3 = c3 + textureSampleLevel(quad_tex, quad_smp, clamp(uv + sy * o, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0) * (w[k] * 0.5);
+                c3 = c3 + textureSampleLevel(quad_tex, quad_smp, clamp(uv + sx * o, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0) * (w[k] * 0.5);
+            }
+        } else {
+            c3 = textureSampleLevel(quad_tex, quad_smp, uv, 0.0);
+        }
+        let c4 = c3 * quad.color;
+        return vec4<f32>(c4.rgb * c4.a, c4.a);
+    }
     if (quad.dst.z > 3.5) {
         // Sekai/Live2D/Live2DBlur: B = max(_Blur, 1); taps at (i, j) · B / _ScreenParams for
         // i, j = -B, -B + 1, … ≤ B, weighted exp2(-0.7213·|offset|²)·0.159155 (offsets in UV)
