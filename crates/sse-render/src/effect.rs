@@ -114,6 +114,16 @@ struct Clip {
     start: f32,
     /// (node, property, curve)
     curves: Vec<(usize, Prop, CurveData)>,
+    /// Animation events `CommandAnimator` handles on the particles: (clip time, event).
+    events: Vec<(f32, ClipEvent)>,
+}
+
+/// `CommandAnimator.OnPlayParticle` / `OnStopParticle`: `transform.Find(path)`'s
+/// `ParticleSystem.Play()` / `Stop()` (with children).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipEvent {
+    PlayParticle(usize),
+    StopParticle(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -544,12 +554,26 @@ fn load_animator(
                         Some((node, prop, cv.data.clone()))
                     })
                     .collect(),
+                events: m
+                    .events
+                    .iter()
+                    .filter_map(|e| {
+                        let node = paths.iter().position(|p| *p == e.data)?;
+                        let ev = match e.function.as_str() {
+                            "OnPlayParticle" => ClipEvent::PlayParticle(node),
+                            "OnStopParticle" => ClipEvent::StopParticle(node),
+                            _ => return None,
+                        };
+                        Some((e.time, ev))
+                    })
+                    .collect(),
             },
             None => Clip {
                 length: 0.0,
                 looping: false,
                 start: 0.0,
                 curves: Vec::new(),
+                events: Vec::new(),
             },
         })
         .collect();
@@ -698,6 +722,17 @@ impl EffectInstance {
         inst
     }
 
+    /// `i` and its descendants.
+    fn subtree(&self, i: usize) -> Vec<usize> {
+        let mut out = vec![i];
+        let mut k = 0;
+        while k < out.len() {
+            out.extend(self.prefab.nodes[out[k]].children.iter().copied());
+            k += 1;
+        }
+        out
+    }
+
     fn effective_active(&self, mut i: usize) -> bool {
         loop {
             if !self.active[i] {
@@ -751,10 +786,32 @@ impl EffectInstance {
         let before: Vec<bool> = (0..self.prefab.nodes.len())
             .map(|i| self.effective_active(i))
             .collect();
+        let mut fired = Vec::new();
         if let (Some(play), Some(a)) = (self.anim.as_mut(), self.prefab.animator.as_ref()) {
-            advance(play, a, dt);
+            for (state, t0, t1) in advance(play, a, dt) {
+                fired.extend(clip_events(a, state, t0, t1));
+            }
         }
         self.apply_animator();
+        for ev in fired {
+            let (node, play) = match ev {
+                ClipEvent::PlayParticle(n) => (n, true),
+                ClipEvent::StopParticle(n) => (n, false),
+            };
+            for i in self.subtree(node) {
+                let Some((s, _)) = self.prefab.nodes[i].system else {
+                    continue;
+                };
+                if play {
+                    if self.effective_active(i) {
+                        let def = self.prefab.systems[s].clone();
+                        self.systems[s].play(&def, dt);
+                    }
+                } else {
+                    self.systems[s].stop_emitting();
+                }
+            }
+        }
         for i in 0..self.prefab.nodes.len() {
             let Some((s, _)) = self.prefab.nodes[i].system else {
                 continue;
@@ -1043,17 +1100,23 @@ fn mul(a: [f32; 6], b: [f32; 6]) -> [f32; 6] {
     ]
 }
 
-/// One Animator frame: state time, exit-time transitions with their crossfade.
-fn advance(play: &mut AnimPlay, a: &Animator, dt: f32) {
+/// One Animator frame: state time, exit-time transitions with their crossfade. Returns the
+/// (state, time before, time after) windows played, for animation events.
+fn advance(play: &mut AnimPlay, a: &Animator, dt: f32) -> Vec<(usize, f32, f32)> {
     let len = |s: usize| {
         a.states[s]
             .clip
             .map_or(0.0, |c| a.clips[c].length)
             .max(1e-4)
     };
+    let mut windows = Vec::with_capacity(2);
+    let t0 = play.time;
     play.time += dt * a.states[play.state].speed;
+    windows.push((play.state, t0, play.time));
     if let Some((next, nt, el, fl)) = play.fade.as_mut() {
+        let n0 = *nt;
         *nt += dt * a.states[*next].speed;
+        windows.push((*next, n0, *nt));
         *el += dt;
         if *el >= *fl {
             let (n, t) = (*next, *nt);
@@ -1061,7 +1124,7 @@ fn advance(play: &mut AnimPlay, a: &Animator, dt: f32) {
             play.time = t;
             play.fade = None;
         }
-        return;
+        return windows;
     }
     if let Some((dest, exit, dur, fixed)) = a.states[play.state].exit
         && play.time / len(play.state) >= exit
@@ -1069,6 +1132,40 @@ fn advance(play: &mut AnimPlay, a: &Animator, dt: f32) {
         let fl = if fixed { dur } else { dur * len(play.state) };
         play.fade = Some((dest, 0.0, 0.0, fl));
     }
+    windows
+}
+
+/// Events of `state`'s clip whose time falls in [t0, t1) of the state's play time (looping
+/// clips wrap).
+fn clip_events(a: &Animator, state: usize, t0: f32, t1: f32) -> Vec<ClipEvent> {
+    let Some(c) = a.states[state].clip.map(|c| &a.clips[c]) else {
+        return Vec::new();
+    };
+    if c.events.is_empty() || t1 <= t0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if c.looping && c.length > 0.0 {
+        let first = (t0 / c.length).floor() as i64;
+        let last = (t1 / c.length).floor() as i64;
+        for k in first..=last {
+            let base = k as f32 * c.length;
+            for &(t, ev) in &c.events {
+                let at = base + (t - c.start);
+                if at >= t0 && at < t1 {
+                    out.push(ev);
+                }
+            }
+        }
+    } else {
+        for &(t, ev) in &c.events {
+            let at = t - c.start;
+            if at >= t0 && at < t1 {
+                out.push(ev);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

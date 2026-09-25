@@ -10,6 +10,7 @@
 
 mod bgm;
 mod character;
+mod effect_audio;
 mod hologram;
 mod lipsync;
 mod shake;
@@ -454,6 +455,7 @@ impl<'a> Baker<'a> {
             }
             frames.push(self.snapshot(f));
         }
+        self.effect_sounds();
         // CleanupSounds(): fade everything out.
         let end = self.tl.end_frame;
         let fade = self.tb.frames_for(consts::CLEANUP_SOUND_FADE_TIME);
@@ -1446,6 +1448,101 @@ impl<'a> Baker<'a> {
             EffectOp::StopShakeScreen => self.screen_shake = None,
             EffectOp::StopShakeWindow => self.window_shake = None,
             EffectOp::Noop => {}
+        }
+    }
+
+    /// Scenario effect prefab sounds (see `effect_audio`), for every `PlayScenarioEffect`
+    /// instance; the environment SE player is shared by all of them.
+    fn effect_sounds(&mut self) {
+        use effect_audio::{EffectSounds, SoundEvent};
+        let fps = f64::from(self.tb.fps());
+        let end = self.tl.end_frame;
+        let mut loaded: BTreeMap<String, Option<std::sync::Arc<EffectSounds>>> = BTreeMap::new();
+        // (absolute seconds, instance, event)
+        let mut timeline: Vec<(f64, usize, SoundEvent)> = Vec::new();
+        let mut sounds = Vec::new();
+        for (i, (bundle, _name, start, stop)) in self.effects.iter().enumerate() {
+            let s = loaded
+                .entry(bundle.clone())
+                .or_insert_with(|| EffectSounds::load(self.lib, bundle).map(std::sync::Arc::new))
+                .clone();
+            let Some(s) = s else { continue };
+            let t0 = f64::from(*start) / fps;
+            let stop_s = stop.map(|st| (f64::from(st) - f64::from(*start)) as f32 / fps as f32);
+            let horizon = (f64::from(end.saturating_sub(*start)) / fps) as f32;
+            for (t, ev) in s.events(stop_s, horizon) {
+                timeline.push((t0 + f64::from(t), i, ev));
+            }
+            sounds.push((i, s));
+        }
+        if timeline.is_empty() {
+            return;
+        }
+        timeline.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let cues_of = |i: usize| sounds.iter().find(|(k, _)| *k == i).map(|(_, s)| s.clone());
+        // per instance: (loop SE fade time, volume); the shared environment player
+        let mut params: BTreeMap<usize, (f32, f32)> = BTreeMap::new();
+        let mut env: Option<usize> = None;
+        for (t, i, ev) in timeline {
+            let frame = (t * fps).round() as u32;
+            if frame >= end {
+                break;
+            }
+            let (fade, volume) = *params.entry(i).or_insert((0.25, 1.0));
+            let Some(s) = cues_of(i) else { continue };
+            match ev {
+                SoundEvent::FadeTime(v) => params.entry(i).or_insert((0.25, 1.0)).0 = v,
+                SoundEvent::Volume(v) => params.entry(i).or_insert((0.25, 1.0)).1 = v,
+                SoundEvent::PlayEnv(cue) => {
+                    let Some(files) = s.cues.get(&cue) else {
+                        continue;
+                    };
+                    let frames = self.tb.frames_for(fade);
+                    if let Some(prev) = env.take()
+                        && self.audio[prev].stop_frame.is_none()
+                    {
+                        self.audio[prev].stop_frame = Some(frame + frames);
+                        self.audio[prev].fade_out = frames;
+                    }
+                    self.audio.push(AudioCue {
+                        files: files.clone(),
+                        start_frame: frame,
+                        stop_frame: None,
+                        looping: true,
+                        volume,
+                        fade_in: frames,
+                        fade_out: 0,
+                        kind: AudioKind::Se,
+                        aisac: None,
+                    });
+                    env = Some(self.audio.len() - 1);
+                }
+                SoundEvent::StopEnv => {
+                    let frames = self.tb.frames_for(fade);
+                    if let Some(prev) = env.take()
+                        && self.audio[prev].stop_frame.is_none()
+                    {
+                        self.audio[prev].stop_frame = Some(frame + frames);
+                        self.audio[prev].fade_out = frames;
+                    }
+                }
+                SoundEvent::PlaySe(cue) => {
+                    let Some(files) = s.cues.get(&cue) else {
+                        continue;
+                    };
+                    self.audio.push(AudioCue {
+                        files: files.clone(),
+                        start_frame: frame,
+                        stop_frame: None,
+                        looping: false,
+                        volume: 1.0,
+                        fade_in: 0,
+                        fade_out: 0,
+                        kind: AudioKind::Se,
+                        aisac: None,
+                    });
+                }
+            }
         }
     }
 
