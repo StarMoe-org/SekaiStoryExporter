@@ -25,6 +25,10 @@ together with its impact.
   `Window/ContentRoot/Content/Text`，其下只有名字与正文（及其描边层）。此前把对话框底板、名字横条和 AUTO 标签也一起抖了。
   **像素影响**：ShakeWindow 期间对话框底板、名字横条、AUTO 标签保持不动。
   ShakeWindow now moves only the name and words, as the prefab does.
+- **Layout 附带的动作与表情**：`SnippetActionCharacterLayout` 在按类型分支之前，先对任意类型执行 `MotionName`（换身体动作）与 `FacialName`（换表情）。
+  此前只在出场（Type 2）时使用，移动（1）、退场（3）、层级调整（6）所带的动作与表情都被丢弃，角色在这些时刻僵住不动。IR v3：`Layout.motion` / `Layout.facial`。
+  **像素影响**：几乎所有剧集中，移动、退场、层级调整时的动作与表情现在会播放（本地日服每话 7–43 处）；节奏不变（CN 第一章 440.6 s、日服 217 第 3 话 697.2 s 均不变）。
+  Layout snippets of every type now apply their motion and facial, as the game does before branching on the type.
 
 ## 0.1.0（2026-09-25）
 

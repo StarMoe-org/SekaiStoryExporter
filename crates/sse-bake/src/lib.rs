@@ -714,6 +714,70 @@ impl<'a> Baker<'a> {
         }
     }
 
+    /// The type branch of `SnippetActionCharacterLayout` (after the motion / facial change).
+    fn layout(&mut self, l: &Layout, f: u32) -> Result<(), BakeError> {
+        match &l.op {
+            LayoutOp::Appear {
+                from,
+                offset_x,
+                costume,
+                motion,
+                facial,
+                depth,
+            } => {
+                self.appear(
+                    l.character,
+                    *from,
+                    *offset_x,
+                    costume.as_deref(),
+                    motion.as_deref(),
+                    facial.as_deref(),
+                    f,
+                    true,
+                )?;
+                self.depth(l.character, *depth);
+            }
+            LayoutOp::Move {
+                to,
+                offset_x,
+                duration,
+            } => {
+                let (x, y) = self.side_position(*to, *offset_x);
+                let frames = self.tb.frames_for(*duration);
+                if let Some(c) = self.chars.get_mut(&l.character) {
+                    let cur = c.x.at(f);
+                    c.x = Tween {
+                        from: cur,
+                        to: x,
+                        start: f,
+                        frames,
+                        ease_out_quad: false,
+                    };
+                    c.y = y;
+                }
+            }
+            LayoutOp::Hide { delay } => {
+                // FadeOpacityCoroutine: WaitForSeconds(delay) (>= 1 frame), then the fade
+                let start = f + self.tb.frames_for(*delay).max(1);
+                let frames = self.tb.frames_for(consts::CHARACTER_FADE_DURATION);
+                if let Some(c) = self.chars.get_mut(&l.character) {
+                    let cur = c.opacity.at(f);
+                    c.opacity = Tween {
+                        from: cur,
+                        to: 0.0,
+                        start,
+                        frames,
+                        ease_out_quad: false,
+                    };
+                    c.hide_at = Some(start + frames);
+                }
+            }
+            LayoutOp::Shake { .. } => note(&mut self.notes, "character shake not rendered"),
+            LayoutOp::Depth { depth } => self.depth(l.character, *depth),
+        }
+        Ok(())
+    }
+
     fn act(&mut self, instr: &Instr, f: u32) -> Result<(), BakeError> {
         let timing = &self.tl.instrs[&instr.index];
         match &instr.kind {
@@ -780,65 +844,17 @@ impl<'a> Baker<'a> {
                     self.sound(s, f);
                 }
             }
-            InstrKind::Layout(l) => match &l.op {
-                LayoutOp::Appear {
-                    from,
-                    offset_x,
-                    costume,
-                    motion,
-                    facial,
-                    depth,
-                } => {
-                    self.appear(
+            InstrKind::Layout(l) => {
+                if l.motion.is_some() || l.facial.is_some() {
+                    self.change_motion(
                         l.character,
-                        *from,
-                        *offset_x,
-                        costume.as_deref(),
-                        motion.as_deref(),
-                        facial.as_deref(),
-                        f,
-                        true,
+                        l.motion.as_deref(),
+                        l.facial.as_deref(),
+                        false,
                     )?;
-                    self.depth(l.character, *depth);
                 }
-                LayoutOp::Move {
-                    to,
-                    offset_x,
-                    duration,
-                } => {
-                    let (x, y) = self.side_position(*to, *offset_x);
-                    let frames = self.tb.frames_for(*duration);
-                    if let Some(c) = self.chars.get_mut(&l.character) {
-                        let cur = c.x.at(f);
-                        c.x = Tween {
-                            from: cur,
-                            to: x,
-                            start: f,
-                            frames,
-                            ease_out_quad: false,
-                        };
-                        c.y = y;
-                    }
-                }
-                LayoutOp::Hide { delay } => {
-                    // FadeOpacityCoroutine: WaitForSeconds(delay) (>= 1 frame), then the fade
-                    let start = f + self.tb.frames_for(*delay).max(1);
-                    let frames = self.tb.frames_for(consts::CHARACTER_FADE_DURATION);
-                    if let Some(c) = self.chars.get_mut(&l.character) {
-                        let cur = c.opacity.at(f);
-                        c.opacity = Tween {
-                            from: cur,
-                            to: 0.0,
-                            start,
-                            frames,
-                            ease_out_quad: false,
-                        };
-                        c.hide_at = Some(start + frames);
-                    }
-                }
-                LayoutOp::Shake { .. } => note(&mut self.notes, "character shake not rendered"),
-                LayoutOp::Depth { depth } => self.depth(l.character, *depth),
-            },
+                self.layout(l, f)?;
+            }
             InstrKind::ChangeMotion {
                 character,
                 motion,

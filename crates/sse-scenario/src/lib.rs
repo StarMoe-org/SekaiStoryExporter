@@ -474,7 +474,24 @@ impl Parser<'_> {
                 });
             }
         };
-        InstrKind::Layout(Layout { character, op })
+        let (motion, facial) = if matches!(op, LayoutOp::Appear { .. }) {
+            (None, None)
+        } else {
+            if !l.costume_type.is_empty() {
+                self.diags.push(Diagnostic::IgnoredField {
+                    index: pos,
+                    field: "LayoutData.CostumeType (not Appear)".into(),
+                    value: l.costume_type.clone(),
+                });
+            }
+            (opt(&l.motion_name), opt(&l.facial_name))
+        };
+        InstrKind::Layout(Layout {
+            character,
+            op,
+            motion,
+            facial,
+        })
     }
 
     fn effect(&mut self, pos: u32, e: &raw::SpecialEffect) -> InstrKind {

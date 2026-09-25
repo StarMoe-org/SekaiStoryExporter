@@ -153,6 +153,9 @@ impl MotionClips {
                             motion: Some(m), ..
                         },
                     ..
+                })
+                | InstrKind::Layout(Layout {
+                    motion: Some(m), ..
                 }) => {
                     names.insert(m.clone());
                 }
@@ -689,6 +692,10 @@ impl<'a> Scheduler<'a> {
         let InstrKind::Layout(l) = &instrs[pos].kind else {
             unreachable!("layout_body on non-layout")
         };
+        // The motion change comes before the type branch (see `Layout::motion`).
+        if l.motion.is_some() {
+            self.set_body(l.character, l.motion.as_deref(), frame);
+        }
         let seconds = match &l.op {
             LayoutOp::Move { duration, .. } => *duration,
             LayoutOp::Appear {
