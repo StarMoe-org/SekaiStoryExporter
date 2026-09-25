@@ -1212,13 +1212,12 @@ impl<'a> Baker<'a> {
                 self.attached.remove(&id);
                 return;
             }
-            other => {
-                note(
-                    &mut self.notes,
-                    &format!("character shader {other:?} not rendered"),
-                );
+            "blur" => {
+                note(&mut self.notes, "character shader \"blur\" not rendered");
                 return;
             }
+            // matches none of the game's branches: the snippet just finishes
+            _ => return,
         };
         if self.shaders.get(&id).is_some_and(|c| c.kind == kind) {
             return;
