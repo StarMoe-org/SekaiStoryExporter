@@ -84,6 +84,21 @@ sse --library out bake <selector> [--frame N]
 `--crf`、`--ffmpeg`、`--game cn|jp`（默认按 Ripper 输出里记录的区服）。`--library` 与 `--ui` 也可以用环境变量
 `SSE_LIBRARY` / `SSE_UI_DIR` 指定。
 
+## 使用 S3
+
+library 和输出都可以放在 AWS S3，或 MinIO、Cloudflare R2 等兼容服务上：
+
+```bash
+export AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...
+export AWS_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com   # 非 AWS 时设置；AWS 用 AWS_REGION
+
+# library 由 SekaiStoryRipper 用 --out s3://my-bucket/sekai/jp 发布
+sse --library s3://my-bucket/sekai/jp export event:185/1 -o s3://my-bucket/videos/event_185_01.mp4 --ui ui-jp
+```
+
+- 每一话只下载实际用到的文件，缓存在 `--cache-dir`（默认 `~/.cache/sse`）；远端 bundle 更新后会自动重新下载。
+- `-o s3://…` 先渲染到缓存目录，完成后上传视频和报告。设计见 [ADR-0015](docs/adr/0015-s3.md)。
+
 ## 文档
 
 | 文档 | 内容 |
@@ -128,6 +143,10 @@ Quick start:
 3. Rip an episode with [SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper).
 4. Export the UI kit from a game client you own: `uv run tools/ui-kit/extract.py <client.ipa> ui`.
 5. `sse --library out export <selector> -o ep.mp4 --ui ui`.
+
+Both `--library` and `-o` also accept `s3://bucket/…` (AWS S3 or compatible stores such as MinIO and
+R2; credentials from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`). Only the files an episode needs
+are fetched into a local cache.
 
 **This repository ships no game assets and no Live2D Cubism Core.** Every asset remains the
 property of SEGA / Colorful Palette / Craft Egg; you supply them yourself. Not affiliated with

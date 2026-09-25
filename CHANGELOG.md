@@ -8,6 +8,11 @@ together with its impact.
 
 ## 未发布
 
+### 新增 / Added
+
+- **S3**：`--library s3://bucket/prefix` 直接读取 SekaiStoryRipper 发布到 S3（或 MinIO、R2 等兼容服务）的 library，按 episode 只同步所需文件到本地缓存（`--cache-dir` / `SSE_CACHE_DIR`）；`-o s3://bucket/key` 渲染完成后上传视频与报告。凭据只从 `AWS_*` 环境变量读取。见 ADR-0015。无像素影响（与本地 library 逐字节相同）。
+  `--library` and `-o` accept `s3://` URLs; only the files an episode needs are fetched.
+
 ### 修复 / Fixed
 
 - **对话框文字描边宽度**：描边层（`WordsOutline` / `NameOutline`，shader `Sekai/TextMeshPro/Mobile/Distance Field`）

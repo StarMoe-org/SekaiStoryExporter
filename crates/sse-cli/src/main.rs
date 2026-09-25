@@ -15,9 +15,15 @@ use sse_core::TimeBase;
 #[derive(Parser)]
 #[command(name = "sse", version, about = "SekaiStoryExporter")]
 struct Cli {
-    /// SekaiStoryRipper output directory (holding `library/` and `episodes/`).
+    /// SekaiStoryRipper output directory (holding `library/` and `episodes/`), or
+    /// s3://bucket/prefix to read it from S3 (credentials from AWS_ACCESS_KEY_ID /
+    /// AWS_SECRET_ACCESS_KEY, endpoint from AWS_ENDPOINT_URL).
     #[arg(long, global = true, env = "SSE_LIBRARY", default_value = ".")]
-    library: PathBuf,
+    library: String,
+    /// Where an S3 library is mirrored and S3 outputs are staged (default: the platform cache
+    /// directory, e.g. ~/.cache/sse).
+    #[arg(long, global = true, env = "SSE_CACHE_DIR")]
+    cache_dir: Option<PathBuf>,
     /// Replacement for {{playerName}} (ADR-0008).
     #[arg(long, global = true, default_value = "「世界」的居民")]
     player_name: String,
@@ -144,9 +150,72 @@ fn parse_size(text: &str) -> Result<(u32, u32), String> {
     ))
 }
 
+/// An output path that may be `s3://bucket/key`: written to `local`, then uploaded by
+/// [`Output::publish`] (ADR-0015).
+struct Output {
+    local: PathBuf,
+    remote: Option<(sse_assets::remote::S3, String)>,
+}
+
+impl Output {
+    fn new(path: &std::path::Path, cache: &std::path::Path) -> Result<Self> {
+        let text = path.to_string_lossy();
+        let Some(location) = sse_assets::remote::S3Location::parse(&text) else {
+            return Ok(Self {
+                local: path.to_owned(),
+                remote: None,
+            });
+        };
+        let location = location?;
+        let key = location.prefix.clone();
+        anyhow::ensure!(!key.is_empty(), "{text}: missing object key");
+        let mut local = cache.join("outputs").join(&location.bucket);
+        local.extend(key.split('/'));
+        std::fs::create_dir_all(local.parent().expect("has parent"))?;
+        let bucket = sse_assets::remote::S3Location {
+            bucket: location.bucket,
+            prefix: String::new(),
+        };
+        Ok(Self {
+            local,
+            remote: Some((sse_assets::remote::S3::new(bucket)?, key)),
+        })
+    }
+
+    /// Uploads the output (and `sibling`, e.g. the report, next to it) when it is remote;
+    /// returns where it ended up.
+    fn publish(&self, sibling: Option<&std::path::Path>) -> Result<String> {
+        let Some((s3, key)) = &self.remote else {
+            return Ok(self.local.display().to_string());
+        };
+        s3.put_file(
+            key,
+            &self.local,
+            sse_assets::remote::content_type(&self.local),
+        )?;
+        if let Some(sibling) = sibling {
+            let name = sibling.file_name().expect("file").to_string_lossy();
+            let sibling_key = match key.rsplit_once('/') {
+                Some((dir, _)) => format!("{dir}/{name}"),
+                None => name.into_owned(),
+            };
+            s3.put_file(
+                &sibling_key,
+                sibling,
+                sse_assets::remote::content_type(sibling),
+            )?;
+        }
+        Ok(format!("s3://{}/{key}", s3.location().bucket))
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let lib = Library::open(&cli.library);
+    let cache = cli
+        .cache_dir
+        .clone()
+        .unwrap_or_else(sse_assets::default_cache_dir);
+    let lib = Library::open_location(&cli.library, &cache)?;
     let opts = sse_scenario::ParseOptions {
         player_name: cli.player_name.clone(),
     };
@@ -172,13 +241,14 @@ fn main() -> Result<()> {
         } => {
             let table = bake(&lib, selector, &opts, out.config())?;
             let mut r =
-                sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&cli.library))?;
+                sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(lib.root()))?;
             let f = table.frames.get(*frame as usize).with_context(|| {
                 format!("frame {frame} out of range (0..{})", table.frames.len())
             })?;
             let rgba = r.render(f)?;
-            sse_export::write_png(output, out.width, out.height, rgba)?;
-            println!("wrote {}", output.display());
+            let target = Output::new(output, &cache)?;
+            sse_export::write_png(&target.local, out.width, out.height, rgba)?;
+            println!("wrote {}", target.publish(None)?);
         }
         Command::Export {
             selector,
@@ -191,13 +261,14 @@ fn main() -> Result<()> {
             out,
         } => {
             let table = bake(&lib, selector, &opts, out.config())?;
+            let target = Output::new(output, &cache)?;
             let mut r =
-                sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&cli.library))?;
+                sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(lib.root()))?;
             r.set_ffmpeg(ffmpeg.clone());
             let n = table.frames.len() as u32;
             let range = from.unwrap_or(0).min(n)..to.unwrap_or(n).min(n);
             let vopts = sse_export::VideoOptions {
-                output: output.clone(),
+                output: target.local.clone(),
                 width: out.width,
                 height: out.height,
                 ffmpeg: ffmpeg.clone(),
@@ -211,12 +282,16 @@ fn main() -> Result<()> {
                     eprintln!("  {done}/{total} frames");
                 }
             })?;
-            let report = output.with_extension("report.txt");
+            let report = target.local.with_extension("report.txt");
             let mut notes = table.notes.clone();
             notes.extend(sse_render::Renderer::notes());
             notes.extend(r.asset_notes());
             std::fs::write(&report, notes.join("\n") + "\n")?;
-            println!("wrote {} (notes: {})", output.display(), report.display());
+            let written = target.publish(Some(&report))?;
+            println!(
+                "wrote {written} (notes next to it: {})",
+                report.file_name().expect("file").to_string_lossy()
+            );
         }
         Command::Bake { selector, frame } => {
             let table = bake(
@@ -275,7 +350,9 @@ fn load(
     let path = lib
         .episode_path(selector)
         .with_context(|| format!("bad selector {selector}"))?;
+    lib.fetch_episode_index(selector)?;
     let index = lib.load_episode(&path)?;
+    lib.sync(&index)?;
     lib.verify_episode(&index)?;
     Ok(sse_scenario::parse_episode(lib, &index, opts)?)
 }

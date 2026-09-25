@@ -7,14 +7,16 @@
 //! - **Explicit failure with a list of missing assets**, pointing at `ripper rip <selector>`.
 //!   Silent degradation is forbidden
 //! - Recording the asset version from `ripper.lock.json`
+//! - Mirroring a library kept in S3 into a local cache (`remote`, ADR-0015)
 //!
 //! ## Not responsible for
-//! - Downloading or decrypting anything (ADR-0006: sse has no CDN or key handling)
+//! - Game CDNs, manifests or decryption (ADR-0006: sse has no CDN or key handling)
 //! - Resolving motion/facial bundles; the episode index is trusted (ADR-0007)
 //! - Interpreting asset contents (each consuming crate does that)
 //!
 //! ## Allowed dependencies
-//! `sse-core` and the external `ripper-format` (serde types only).
+//! `sse-core`, the external `ripper-format` (serde types only), and for `remote` an HTTP client
+//! (reqwest + rustls/ring) with `rusty-s3` request signing.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +25,7 @@ pub use ripper_format::motion::{self, SseMotion};
 
 mod audio;
 mod model;
+pub mod remote;
 
 pub use audio::Pcm;
 pub use model::Model3;
@@ -53,6 +56,8 @@ pub enum AssetError {
     },
     #[error("{path}: wav: {source}")]
     Wav { path: PathBuf, source: hound::Error },
+    #[error("{0}")]
+    Remote(String),
     #[error(
         "{} asset(s) listed in the episode index are missing from the library:\n{}\n\
          run `ripper rip {selector}` to (re)export them",
@@ -67,15 +72,91 @@ pub enum AssetError {
 
 pub type Result<T> = std::result::Result<T, AssetError>;
 
-/// A SekaiStoryRipper output directory (the one holding `library/` and `episodes/`).
-#[derive(Debug, Clone)]
+/// A SekaiStoryRipper output directory (the one holding `library/` and `episodes/`), or a local
+/// mirror of one kept in S3.
+#[derive(Clone)]
 pub struct Library {
     root: PathBuf,
+    mirror: Option<std::sync::Arc<remote::Mirror>>,
+}
+
+impl std::fmt::Debug for Library {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.mirror {
+            Some(m) => write!(f, "Library({} via {})", m.location(), self.root.display()),
+            None => write!(f, "Library({})", self.root.display()),
+        }
+    }
+}
+
+/// Where remote libraries are mirrored: `SSE_CACHE_DIR`, else the platform cache directory.
+pub fn default_cache_dir() -> PathBuf {
+    let var = |name: &str| {
+        std::env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(dir) = var("SSE_CACHE_DIR") {
+        dir
+    } else if let Some(dir) = var("XDG_CACHE_HOME") {
+        dir.join("sse")
+    } else if let Some(dir) = var("LOCALAPPDATA") {
+        dir.join("sse").join("cache")
+    } else if let Some(home) = var("HOME") {
+        home.join(".cache").join("sse")
+    } else {
+        PathBuf::from(".sse-cache")
+    }
 }
 
 impl Library {
     pub fn open(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            mirror: None,
+        }
+    }
+
+    /// A directory, or `s3://bucket/prefix` mirrored under `cache` (ADR-0015).
+    pub fn open_location(location: &str, cache: &Path) -> Result<Self> {
+        let Some(s3) = remote::S3Location::parse(location) else {
+            return Ok(Self::open(location));
+        };
+        let s3 = s3?;
+        let mut root = cache.join("s3").join(&s3.bucket);
+        root.extend(s3.prefix.split('/').filter(|p| !p.is_empty()));
+        let mirror = remote::Mirror::new(remote::S3::new(s3)?, root.clone());
+        mirror.refresh("ripper.lock.json")?;
+        Ok(Self {
+            root,
+            mirror: Some(std::sync::Arc::new(mirror)),
+        })
+    }
+
+    /// The S3 location this library mirrors, if any.
+    pub fn remote(&self) -> Option<&remote::S3Location> {
+        self.mirror.as_ref().map(|m| m.location())
+    }
+
+    /// For a remote library, fetches the selector's episode index (always, it may have been
+    /// re-ripped). A no-op for a local one.
+    pub fn fetch_episode_index(&self, selector: &str) -> Result<()> {
+        let (Some(mirror), Some((kind, rest))) = (&self.mirror, selector.split_once(':')) else {
+            return Ok(());
+        };
+        let Some((key, no)) = rest.rsplit_once('/') else {
+            return Ok(());
+        };
+        mirror.refresh(&format!("episodes/{kind}/{key}/{no}.json"))?;
+        Ok(())
+    }
+
+    /// For a remote library, mirrors every file `index` needs. A no-op for a local one.
+    pub fn sync(&self, index: &EpisodeIndex) -> Result<()> {
+        match &self.mirror {
+            Some(mirror) => mirror.sync_episode(index),
+            None => Ok(()),
+        }
     }
 
     pub fn root(&self) -> &Path {
