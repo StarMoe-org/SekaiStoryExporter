@@ -299,10 +299,22 @@ pub struct SystemDef {
     velocity_scale: f32,
     max_particle_size: f32,
     pub sorting_order: i32,
+    /// `Custom1.x` as the renderer streams it (`CustomDataModule` vector 0, x), when the
+    /// renderer's vertex streams include `Custom1X`; see [`SystemDef::set_custom1x`].
+    custom1x: Option<Curve>,
     seed: u32,
 }
 
+/// `ParticleSystemVertexStream.Custom1X`.
+const CUSTOM1X_STREAM: i64 = 31;
+
 impl SystemDef {
+    /// `ParticleShaderSettings.UpdateMode` (on `Awake`): adds the `Custom1X` stream and sets
+    /// custom data vector 0 to the constant 1 (`Mode.Additive`) or 0 (`Mode.AlphaBlend`).
+    pub fn set_custom1x(&mut self, value: f32) {
+        self.custom1x = Some(Curve::Const(value));
+    }
+
     /// `ps` = the ParticleSystem typetree, `r` = its ParticleSystemRenderer's.
     pub fn parse(ps: &Value, r: &Value, seed: u32) -> Self {
         let i = &ps["InitialModule"];
@@ -418,6 +430,17 @@ impl SystemDef {
             velocity_scale: r.get("m_VelocityScale").map_or(0.0, f),
             max_particle_size: r.get("m_MaxParticleSize").map_or(0.5, f),
             sorting_order: r["m_SortingOrder"].as_i64().unwrap_or(0) as i32,
+            custom1x: {
+                let cd = &ps["CustomDataModule"];
+                let streamed = r["m_VertexStreams"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|v| v.as_i64() == Some(CUSTOM1X_STREAM)));
+                (streamed
+                    && bv(cd, "enabled")
+                    && cd["mode0"].as_i64() == Some(1)
+                    && cd["vectorComponentCount0"].as_i64().unwrap_or(0) >= 1)
+                    .then(|| Curve::parse(&cd["vector0_0"]))
+            },
             seed,
         }
     }
@@ -426,7 +449,8 @@ impl SystemDef {
 // ------------------------------------------------------------------ runtime
 
 /// A particle quad: corners (local frame, world units), UV rect (v up), colour.
-pub type Quad = ([[f32; 2]; 4], [f32; 4], [f32; 4]);
+/// Corners, UVs, colour, and the particle's `Custom1.x` vertex stream (0 without one).
+pub type Quad = ([[f32; 2]; 4], [f32; 4], [f32; 4], f32);
 
 #[derive(Debug, Clone)]
 struct Particle {
@@ -755,7 +779,8 @@ impl SystemState {
                     [q(-hw, -hh), q(hw, -hh), q(hw, hh), q(-hw, hh)]
                 }
             };
-            out.push((corners, uv, c));
+            let custom = def.custom1x.as_ref().map_or(0.0, |k| k.eval(p.rnd[4], t));
+            out.push((corners, uv, c, custom));
         }
         out
     }

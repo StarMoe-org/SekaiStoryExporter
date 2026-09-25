@@ -64,6 +64,10 @@ struct Sprite {
 pub enum Blend {
     Alpha,
     Additive,
+    /// `Sekai/Particles/Additive+AlphaBlend` (Blend One OneMinusSrcAlpha, `rgb × a` out):
+    /// alpha out = `a` when the particle's `Custom1.x ≤ 0.5` (alpha blending), else 0
+    /// (additive). Resolved per particle.
+    ByCustom1,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +176,9 @@ fn blend_of(mat: &Value, shader_names: &BTreeMap<i64, String>) -> Blend {
     }
     if let Some(n) = shader_names.get(&id) {
         let n = n.to_ascii_lowercase();
+        if n.contains("add + alpha blend") {
+            return Blend::ByCustom1;
+        }
         if n.contains("add") && !n.contains("alpha") {
             return Blend::Additive;
         }
@@ -307,6 +314,7 @@ impl Prefab {
                 .collect();
             let mut ps = None;
             let mut psr = None;
+            let mut shader_settings = None;
             for c in comps {
                 let Some(ct) = tree(c) else { continue };
                 match class(c) {
@@ -347,6 +355,10 @@ impl Prefab {
                                     [f(&c4["r"]), f(&c4["g"]), f(&c4["b"]), f(&c4["a"])],
                                 ));
                             }
+                            // `Awake` runs whether or not the component is enabled
+                            "ParticleShaderSettings" => {
+                                shader_settings = Some(ct["mode"].as_i64().unwrap_or(0));
+                            }
                             "ScenarioEffector" => {
                                 stop_destroys = ct["stopBehaviour"].as_i64().unwrap_or(1) == 1;
                                 play_on_enable = ct["playOnEnable"].as_i64().unwrap_or(1) != 0;
@@ -362,7 +374,11 @@ impl Prefab {
             {
                 let seed = crc32fast::hash(node.name.as_bytes())
                     ^ (systems.len() as u32).wrapping_mul(0x9E37_79B9);
-                let def = SystemDef::parse(ps, r, seed);
+                let mut def = SystemDef::parse(ps, r, seed);
+                // `ParticleShaderSettings.mode`: 0 Additive → 1, 1 AlphaBlend → 0
+                if let Some(mode) = shader_settings {
+                    def.set_custom1x(if mode == 0 { 1.0 } else { 0.0 });
+                }
                 let mat = r["m_Materials"]
                     .as_array()
                     .and_then(|m| m.first())
@@ -959,7 +975,12 @@ impl EffectInstance {
                 let (sx, sy) = (self.scale[i][0], self.scale[i][1]);
                 let tex = mat.as_ref().and_then(|m| m.tex.clone());
                 let blend = mat.as_ref().map_or(Blend::Alpha, |m| m.blend);
-                for (corners, uv, color) in self.systems[*si].quads(def) {
+                for (corners, uv, color, custom1) in self.systems[*si].quads(def) {
+                    let blend = match blend {
+                        Blend::ByCustom1 if custom1 > 0.5 => Blend::Additive,
+                        Blend::ByCustom1 => Blend::Alpha,
+                        b => b,
+                    };
                     let px =
                         corners.map(|c| [origin[0] + c[0] * sx * wu, origin[1] + c[1] * sy * wu]);
                     let base = tex.as_ref().map_or([0.0, 0.0, 1.0, 1.0], |t| t.uv);
