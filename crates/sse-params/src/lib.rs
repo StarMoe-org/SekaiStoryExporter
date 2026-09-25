@@ -61,10 +61,36 @@ pub struct FrameState {
     /// Scenario effect prefabs (`PlayScenarioEffect`) alive this frame, oldest first.
     #[serde(default)]
     pub effects: Vec<EffectState>,
+    /// `ScenarioStudio` camera and `scenarioRoot` scale (effects 42 / 43): the view is
+    /// offset by `[x, y]` reference-canvas pixels (+y up) and `scenarioRoot` (background,
+    /// characters, effects) scaled by `zoom` about the screen centre. `None` = identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<CameraView>,
     /// `ScenarioSideFadePlayer` while active: its `anchoredPosition` (reference-canvas pixels,
     /// +y up; zero = covering the screen).
     #[serde(default)]
     pub side_fade: Option<[f32; 2]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraView {
+    pub x: f32,
+    pub y: f32,
+    pub zoom: f32,
+}
+
+impl CameraView {
+    /// A point of `scenarioRoot` (reference-canvas pixels from the centre, +y up) on screen,
+    /// given the root's shake offset.
+    pub fn apply(view: Option<&CameraView>, shake: [f32; 2], p: [f32; 2]) -> [f32; 2] {
+        match view {
+            Some(v) => [
+                shake[0] + v.zoom * p[0] - v.x,
+                shake[1] + v.zoom * p[1] - v.y,
+            ],
+            None => [shake[0] + p[0], shake[1] + p[1]],
+        }
+    }
 }
 
 /// One `PlayScenarioEffect` instance: the prefab `name` from `bundle`, instantiated
@@ -102,6 +128,9 @@ pub struct BackgroundState {
     /// Crossfade source and the weight of `current` in [0, 1].
     pub previous: Option<String>,
     pub mix: f32,
+    /// `backgroundImage.material` = `Materials/UI/UIGaussianBlur` (effect 44 "true").
+    #[serde(default)]
+    pub blur: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +152,9 @@ pub struct CharacterState {
     /// "monitor").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hologram: Option<HologramState>,
+    /// `Live2DBlurController` on the `RawImage` (character shader "blur"): `_Blur`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur: Option<f32>,
 }
 
 /// The `Live2D/Materials/Live2DHologram` instance's animated values this frame.

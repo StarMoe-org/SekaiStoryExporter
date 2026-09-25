@@ -260,10 +260,15 @@ struct Baker<'a> {
     effects: Vec<(String, String, u32, Option<u32>)>,
     /// Character shader effects (case 22) and prefabs attached to model views, by character.
     shaders: BTreeMap<CharacterId, hologram::Controller>,
+    /// `Live2DBlurController._intensity` by character (character shader "blur").
+    blurs: BTreeMap<CharacterId, f32>,
     attached: BTreeMap<CharacterId, Vec<hologram::Attached>>,
     audio: Vec<AudioCue>,
     /// `bgmVolumeTweener` (see `ParamTable::bgm_volume`).
     bgm_volume: Vec<VolumeTween>,
+    /// `ScenarioStudioCamera.cameraMoveTweener` (x, y) and `cameraZoomTweener`.
+    camera_move: [Tween; 2],
+    camera_zoom: Tween,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
     notes: Vec<String>,
@@ -294,6 +299,7 @@ impl<'a> Baker<'a> {
                 current: ep.initial.background.as_ref().map(|b| b.0.clone()),
                 previous: None,
                 mix: 1.0,
+                blur: false,
             },
             bg_tween: None,
             fader: [0.0; 4],
@@ -317,9 +323,12 @@ impl<'a> Baker<'a> {
             side_fade: None,
             effects: Vec::new(),
             shaders: BTreeMap::new(),
+            blurs: BTreeMap::new(),
             attached: BTreeMap::new(),
             audio: Vec::new(),
             bgm_volume: Vec::new(),
+            camera_move: [Tween::fixed(0.0), Tween::fixed(0.0)],
+            camera_zoom: Tween::fixed(1.0),
             bgm: None,
             se_loops: BTreeMap::new(),
             notes: tl.notes.clone(),
@@ -1049,6 +1058,34 @@ impl<'a> Baker<'a> {
                     timing: t,
                 });
             }
+            // `ScenarioStudioCamera.CameraMove`: `Kill(complete)` the running move, then
+            // `DOLocalMove((x, y, z))` over `Duration` (default ease OutQuad)
+            EffectOp::CameraMove { x, y, valid } => {
+                if *valid {
+                    let frames = self.tb.frames_for(d);
+                    for (t, to) in self.camera_move.iter_mut().zip([*x, *y]) {
+                        *t = Tween {
+                            from: t.to,
+                            to,
+                            start: f,
+                            frames,
+                            ease_out_quad: true,
+                        };
+                    }
+                }
+            }
+            // `cameraZoomTweener.Kill(complete)`, `scenarioRoot.DOScale(scale, Duration)`
+            EffectOp::CameraZoom { scale } => {
+                self.camera_zoom = Tween {
+                    from: self.camera_zoom.to,
+                    to: *scale,
+                    start: f,
+                    frames: self.tb.frames_for(d),
+                    ease_out_quad: true,
+                };
+            }
+            // `backgroundImage.material = on ? Resources "Materials/UI/UIGaussianBlur" : null`
+            EffectOp::BackgroundBlur { on } => self.background.blur = *on,
             EffectOp::Blur { dir } => {
                 let (from, to) = match dir {
                     Direction::In => (self.blur_value, 1.0),
@@ -1222,11 +1259,19 @@ impl<'a> Baker<'a> {
             "none" => {
                 // `DetachModelEffect` (every character), `DetachScenarioEffectToCharacter`
                 self.shaders.clear();
+                self.blurs.clear();
                 self.attached.remove(&id);
                 return;
             }
+            // `AttachModelEffect(7, id, float.TryParse(StringValSub) ?? 1)`: a
+            // `Live2DBlurController` (`SetBlurIntensity` clamps to [1, 3]) replacing the current
+            // model effect, unless the current one is already a blur
             "blur" => {
-                note(&mut self.notes, "character shader \"blur\" not rendered");
+                if !self.blurs.contains_key(&id) {
+                    let v = bundle.trim().parse::<f32>().unwrap_or(1.0);
+                    self.shaders.remove(&id);
+                    self.blurs.insert(id, v.clamp(1.0, 3.0));
+                }
                 return;
             }
             // matches none of the game's branches: the snippet just finishes
@@ -1236,6 +1281,7 @@ impl<'a> Baker<'a> {
             return;
         }
         let seed = self.opts.seed ^ (u64::from(f) << 20) ^ id as u64;
+        self.blurs.remove(&id);
         self.shaders
             .insert(id, hologram::Controller::new(kind, f, seed));
         if kind == hologram::Kind::Hologram {
@@ -1310,6 +1356,7 @@ impl<'a> Baker<'a> {
                 color: self.ambient,
                 params: c.values.clone(),
                 hologram,
+                blur: self.blurs.get(id).copied(),
             });
         }
         let talk = self.talk.as_ref().map(|(index, t)| {
@@ -1365,6 +1412,14 @@ impl<'a> Baker<'a> {
             scenario_shake: self.screen_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
             window_shake: self.window_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
             side_fade: self.side_fade.as_ref().and_then(|s| s.at(f)),
+            camera: {
+                let v = CameraView {
+                    x: self.camera_move[0].at(f),
+                    y: self.camera_move[1].at(f),
+                    zoom: self.camera_zoom.at(f),
+                };
+                (v.x != 0.0 || v.y != 0.0 || v.zoom != 1.0).then_some(v)
+            },
             effects: self
                 .effects
                 .iter()

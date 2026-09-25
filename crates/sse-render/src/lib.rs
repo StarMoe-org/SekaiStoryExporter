@@ -238,8 +238,12 @@ impl Renderer {
             } else {
                 1.0
             };
-            plan.scene
-                .push(gpu::QuadDraw::image(id, bg_rect, [1.0, 1.0, 1.0, a]));
+            let q = gpu::QuadDraw::image(id, bg_rect, [1.0, 1.0, 1.0, a]);
+            plan.scene.push(if frame.background.blur {
+                q.with_blur(consts::UI_GAUSSIAN_BLUR_SAMPLING_DISTANCE)
+            } else {
+                q
+            });
         }
 
         // 2. characters (in order, each composited right after its RT render)
@@ -264,19 +268,20 @@ impl Renderer {
                     // no texture: a sample above every `_Line` adds nothing
                     scan: self.scan.as_ref().map_or(1.0, |s| s.sample(h.time)),
                 }),
+                blur: c.blur,
             });
         }
 
-        // ShakeScreen moves `ScenarioRoot` (background, characters) in canvas pixels, +y up
-        let [sx, sy] = frame.scenario_shake;
-        if sx != 0.0 || sy != 0.0 {
-            let (ox, oy) = (sx * k, -sy * k);
+        // `ScenarioRoot` (background, characters, effects) on screen: ShakeScreen moves it
+        // (canvas pixels, +y up), CameraZoom scales it about the centre and CameraMove moves
+        // the studio camera the other way
+        let xf = root_xf(frame, k, [w, h]);
+        if !xf.is_identity() {
             for q in &mut plan.scene {
-                q.translate(ox, oy);
+                q.transform(&xf);
             }
             for c in &mut plan.characters {
-                c.rect[0] += ox;
-                c.rect[1] += oy;
+                c.rect = xf.rect(c.rect);
             }
         }
 
@@ -297,7 +302,7 @@ impl Renderer {
                 plan.particles.push(gpu::ParticleDraw {
                     additive: mat == fx::Material::Additive,
                     image: atlas.id,
-                    corners,
+                    corners: corners.map(|p| xf.point(p)),
                     uvs: [
                         [u0, 1.0 - v0],
                         [u1, 1.0 - v0],
@@ -445,12 +450,9 @@ impl Renderer {
             }
         }
         self.effects.retain(|k, _| keep.contains(k));
-        let [sx, sy] = frame.scenario_shake;
         let to_screen = |p: [f32; 2]| {
-            [
-                screen[0] * 0.5 + (p[0] + sx) * k,
-                screen[1] * 0.5 - (p[1] + sy) * k,
-            ]
+            let q = sse_params::CameraView::apply(frame.camera.as_ref(), frame.scenario_shake, p);
+            [screen[0] * 0.5 + q[0] * k, screen[1] * 0.5 - q[1] * k]
         };
         let attached: std::collections::BTreeSet<_> = frame
             .effects
@@ -832,6 +834,17 @@ impl Renderer {
 }
 
 /// `ScenarioPlayer.movieResolution` (2338, 1080) in target pixels.
+/// `scenarioRoot`'s placement on screen (see [`gpu::ScreenXf`]).
+fn root_xf(frame: &FrameState, k: f32, screen: [f32; 2]) -> gpu::ScreenXf {
+    let [sx, sy] = frame.scenario_shake;
+    let (zoom, cx, cy) = frame.camera.map_or((1.0, 0.0, 0.0), |c| (c.zoom, c.x, c.y));
+    gpu::ScreenXf {
+        center: [screen[0] * 0.5, screen[1] * 0.5],
+        zoom,
+        offset: [(sx - cx) * k, -(sy - cy) * k],
+    }
+}
+
 fn movie_rect(cfg: &RenderConfig) -> (u32, u32) {
     let k = cfg.ui_scale();
     let [w, h] = consts::MOVIE_RESOLUTION;

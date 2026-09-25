@@ -68,7 +68,7 @@ struct Quad {
     uv: vec4<f32>,     // u0, v0, u1, v1
     color: vec4<f32>,  // vertex colour
     dst: vec4<f32>,    // target w, h, mode, _
-    extra: vec4<f32>,  // mode 2: _Line, _SubColor.a, _SubTex.r
+    extra: vec4<f32>,  // mode 2: _Line, _SubColor.a, _SubTex.r; mode 3: _SamplingDistance
 };
 
 @group(0) @binding(0) var<uniform> quad: Quad;
@@ -92,6 +92,47 @@ fn quad_vs(@builtin(vertex_index) vi: u32) -> QuadOut {
 
 @fragment
 fn quad_fs(i: QuadOut) -> @location(0) vec4<f32> {
+    if (quad.dst.z > 3.5) {
+        // Sekai/Live2D/Live2DBlur: B = max(_Blur, 1); taps at (i, j) · B / _ScreenParams for
+        // i, j = -B, -B + 1, … ≤ B, weighted exp2(-0.7213·|offset|²)·0.159155 (offsets in UV)
+        let b = max(quad.extra.x, 1.0);
+        let step = vec2<f32>(b) / quad.dst.xy;
+        var acc = vec4<f32>(0.0);
+        var wsum = 0.0;
+        var x = -b;
+        loop {
+            if (x > b) { break; }
+            var y = -b;
+            loop {
+                if (y > b) { break; }
+                let o = step * vec2<f32>(x, y);
+                // exp2(x) with |x| < 2e-4 here: 1 + x·ln2 is exact to f32 (rule R-2)
+                let w = (1.0 + dot(o, o) * -0.721347511 * 0.693147181) * 0.159154981;
+                acc = acc + textureSampleLevel(quad_tex, quad_smp, i.uv + o, 0.0) * w;
+                wsum = wsum + w;
+                y = y + 1.0;
+            }
+            x = x + 1.0;
+        }
+        let c2 = acc / wsum * quad.color;
+        return vec4<f32>(c2.rgb * c2.a, c2.a);
+    }
+    if (quad.dst.z > 2.5) {
+        // Sekai/UI/UIGaussianBlur: 7 taps down the column and 7 along the row, 3 each side,
+        // `_SamplingDistance` texels apart; each line weighted (0.036 0.113 0.216 0.269 …)
+        // and the two lines averaged. Blend SrcAlpha / OneMinusSrcAlpha → premultiplied here.
+        let texel = 1.0 / vec2<f32>(textureDimensions(quad_tex));
+        let sy = vec2<f32>(0.0, texel.y * quad.extra.x);
+        let sx = vec2<f32>(texel.x * quad.extra.x, 0.0);
+        let w = array<f32, 7>(0.036, 0.113, 0.216, 0.269, 0.216, 0.113, 0.036);
+        var acc = vec4<f32>(0.0);
+        for (var k = 0; k < 7; k = k + 1) {
+            let o = f32(k - 3);
+            acc = acc + textureSampleLevel(quad_tex, quad_smp, i.uv + sy * o, 0.0) * quad.color * (w[k] * 0.5);
+            acc = acc + textureSampleLevel(quad_tex, quad_smp, i.uv + sx * o, 0.0) * quad.color * (w[k] * 0.5);
+        }
+        return vec4<f32>(acc.rgb * acc.a, acc.a);
+    }
     let t = textureSample(quad_tex, quad_smp, i.uv);
     let c = t * quad.color;
     if (quad.dst.z > 1.5) {

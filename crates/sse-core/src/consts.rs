@@ -207,3 +207,8 @@ pub const HOLOGRAM_ALPHA_RANGE: [f32; 2] = [0.85, 0.9];
 pub const HOLOGRAM_COUNTDOWN_RANGE: [f32; 2] = [0.0, 0.5];
 /// `Setup`: countdown = `Random.Range(0, 0.2) + 0.05`.
 pub const HOLOGRAM_FIRST_COUNTDOWN: [f32; 2] = [0.05, 0.25];
+
+// ---- background blur -------------------------------------------------------------------
+
+/// `Resources/Materials/UI/UIGaussianBlur._SamplingDistance` (JP 6.8.1 `resources.assets|330`).
+pub const UI_GAUSSIAN_BLUR_SAMPLING_DISTANCE: f32 = 2.8;

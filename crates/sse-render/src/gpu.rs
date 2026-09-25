@@ -32,6 +32,33 @@ pub struct Image {
 }
 
 /// A screen-space textured (or solid) quad in target pixels.
+/// `scenarioRoot` on screen in target pixels: uniform scale `zoom` about `center`, then
+/// `offset` (the root's shake minus the studio camera's position).
+#[derive(Debug, Clone, Copy)]
+pub struct ScreenXf {
+    pub center: [f32; 2],
+    pub zoom: f32,
+    pub offset: [f32; 2],
+}
+
+impl ScreenXf {
+    pub fn point(&self, p: [f32; 2]) -> [f32; 2] {
+        [
+            self.center[0] + self.zoom * (p[0] - self.center[0]) + self.offset[0],
+            self.center[1] + self.zoom * (p[1] - self.center[1]) + self.offset[1],
+        ]
+    }
+
+    pub fn rect(&self, r: [f32; 4]) -> [f32; 4] {
+        let [x, y] = self.point([r[0], r[1]]);
+        [x, y, r[2] * self.zoom, r[3] * self.zoom]
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.zoom == 1.0 && self.offset == [0.0, 0.0]
+    }
+}
+
 pub struct QuadDraw {
     image: Option<ImageId>,
     rect: [f32; 4],
@@ -39,12 +66,20 @@ pub struct QuadDraw {
     uv: [f32; 4],
     color: [f32; 4],
     premultiplied: bool,
+    /// `Sekai/UI/UIGaussianBlur` with this `_SamplingDistance` (texels).
+    blur: Option<f32>,
 }
 
 impl QuadDraw {
-    pub fn translate(&mut self, dx: f32, dy: f32) {
-        self.rect[0] += dx;
-        self.rect[1] += dy;
+    /// Draws with the `UIGaussianBlur` material.
+    pub fn with_blur(mut self, sampling_distance: f32) -> Self {
+        self.blur = Some(sampling_distance);
+        self
+    }
+
+    /// Applies a [`ScreenXf`] to the rect.
+    pub fn transform(&mut self, xf: &ScreenXf) {
+        self.rect = xf.rect(self.rect);
     }
 
     pub fn image(id: ImageId, rect: [f32; 4], color: [f32; 4]) -> Self {
@@ -54,6 +89,7 @@ impl QuadDraw {
             uv: [0.0, 0.0, 1.0, 1.0],
             color,
             premultiplied: false,
+            blur: None,
         }
     }
     pub fn image_uv(id: ImageId, rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) -> Self {
@@ -63,6 +99,7 @@ impl QuadDraw {
             uv,
             color,
             premultiplied: false,
+            blur: None,
         }
     }
     pub fn solid(rect: [f32; 4], color: [f32; 4]) -> Self {
@@ -72,6 +109,7 @@ impl QuadDraw {
             uv: [0.0, 0.0, 1.0, 1.0],
             color,
             premultiplied: false,
+            blur: None,
         }
     }
 }
@@ -97,6 +135,8 @@ pub struct CharacterDraw {
     pub rect: [f32; 4],
     /// `Live2DHologram` material on the `RawImage` instead of `UI/Default`.
     pub hologram: Option<Hologram>,
+    /// `Live2DBlur` material with this `_Blur`.
+    pub blur: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -823,8 +863,17 @@ impl Gpu {
                         rect: q.rect,
                         uv: q.uv,
                         color: q.color,
-                        target: [w, h, if q.premultiplied { 1.0 } else { 0.0 }, 0.0],
-                        extra: [0.0; 4],
+                        target: [
+                            w,
+                            h,
+                            match (q.blur, q.premultiplied) {
+                                (Some(_), _) => 3.0,
+                                (None, true) => 1.0,
+                                (None, false) => 0.0,
+                            },
+                            0.0,
+                        ],
+                        extra: [q.blur.unwrap_or(0.0), 0.0, 0.0, 0.0],
                     },
                 )
             })
@@ -1106,9 +1155,10 @@ impl Gpu {
             let mut enc = self.device.create_command_encoder(&Default::default());
             self.character(models, c, &mut enc);
             let rt_view = self.rt.view.clone();
-            let (mode, extra) = match c.hologram {
-                Some(g) => (2.0, [g.line, g.alpha, g.scan, 0.0]),
-                None => (0.0, [0.0; 4]),
+            let (mode, extra) = match (c.hologram, c.blur) {
+                (Some(g), _) => (2.0, [g.line, g.alpha, g.scan, 0.0]),
+                (None, Some(b)) => (4.0, [b, 0.0, 0.0, 0.0]),
+                (None, None) => (0.0, [0.0; 4]),
             };
             let q = QuadGpu {
                 rect: c.rect,
@@ -1208,6 +1258,7 @@ impl Gpu {
                 uv: [0.0, 0.0, 1.0, 1.0],
                 color: [1.0; 4],
                 premultiplied: true,
+                blur: None,
             }]));
         }
         ui.extend(self.quads(&plan.cover));
