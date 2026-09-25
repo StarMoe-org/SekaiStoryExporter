@@ -48,13 +48,31 @@ impl QuadDraw {
     }
 
     pub fn image(id: ImageId, rect: [f32; 4], color: [f32; 4]) -> Self {
-        Self { image: Some(id), rect, uv: [0.0, 0.0, 1.0, 1.0], color, premultiplied: false }
+        Self {
+            image: Some(id),
+            rect,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            color,
+            premultiplied: false,
+        }
     }
     pub fn image_uv(id: ImageId, rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) -> Self {
-        Self { image: Some(id), rect, uv, color, premultiplied: false }
+        Self {
+            image: Some(id),
+            rect,
+            uv,
+            color,
+            premultiplied: false,
+        }
     }
     pub fn solid(rect: [f32; 4], color: [f32; 4]) -> Self {
-        Self { image: None, rect, uv: [0.0, 0.0, 1.0, 1.0], color, premultiplied: false }
+        Self {
+            image: None,
+            rect,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            color,
+            premultiplied: false,
+        }
     }
 }
 
@@ -184,10 +202,20 @@ pub struct Gpu {
     uniforms: Vec<wgpu::Buffer>,
 }
 
-fn tex(device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat, extra: wgpu::TextureUsages) -> Tex {
+fn tex(
+    device: &wgpu::Device,
+    w: u32,
+    h: u32,
+    format: wgpu::TextureFormat,
+    extra: wgpu::TextureUsages,
+) -> Tex {
     let t = device.create_texture(&wgpu::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -199,10 +227,23 @@ fn tex(device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat, extra
     Tex { _tex: t, view }
 }
 
-fn blend(src_c: wgpu::BlendFactor, dst_c: wgpu::BlendFactor, src_a: wgpu::BlendFactor, dst_a: wgpu::BlendFactor) -> wgpu::BlendState {
+fn blend(
+    src_c: wgpu::BlendFactor,
+    dst_c: wgpu::BlendFactor,
+    src_a: wgpu::BlendFactor,
+    dst_a: wgpu::BlendFactor,
+) -> wgpu::BlendState {
     wgpu::BlendState {
-        color: wgpu::BlendComponent { src_factor: src_c, dst_factor: dst_c, operation: wgpu::BlendOperation::Add },
-        alpha: wgpu::BlendComponent { src_factor: src_a, dst_factor: dst_a, operation: wgpu::BlendOperation::Add },
+        color: wgpu::BlendComponent {
+            src_factor: src_c,
+            dst_factor: dst_c,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: src_a,
+            dst_factor: dst_a,
+            operation: wgpu::BlendOperation::Add,
+        },
     }
 }
 
@@ -217,8 +258,9 @@ impl Gpu {
             ..Default::default()
         }))
         .map_err(|e| GpuError::Adapter(e.to_string()))?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .map_err(|e| GpuError::Device(e.to_string()))?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .map_err(|e| GpuError::Device(e.to_string()))?;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("sse"),
@@ -296,12 +338,20 @@ impl Gpu {
             Some(wgpu::VertexBufferLayout {
                 array_stride: 8,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 }],
+                attributes: &[wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 0,
+                    shader_location: 0,
+                }],
             }),
             Some(wgpu::VertexBufferLayout {
                 array_stride: 8,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 1 }],
+                attributes: &[wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 0,
+                    shader_location: 1,
+                }],
             }),
         ];
         let pipe = |layout: &wgpu::PipelineLayout,
@@ -334,7 +384,11 @@ impl Gpu {
                     module: &shader,
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -344,11 +398,43 @@ impl Gpu {
         let additive = blend(F::One, F::One, F::Zero, F::One);
         let multiply = blend(F::Dst, F::OneMinusSrcAlpha, F::Zero, F::One);
         let cubism_pipes = [
-            pipe(&cubism_pl, "cubism_vs", "cubism_fs", &vbufs, FMT, Some(normal), false),
-            pipe(&cubism_pl, "cubism_vs", "cubism_fs", &vbufs, FMT, Some(additive), false),
-            pipe(&cubism_pl, "cubism_vs", "cubism_fs", &vbufs, FMT, Some(multiply), false),
+            pipe(
+                &cubism_pl,
+                "cubism_vs",
+                "cubism_fs",
+                &vbufs,
+                FMT,
+                Some(normal),
+                false,
+            ),
+            pipe(
+                &cubism_pl,
+                "cubism_vs",
+                "cubism_fs",
+                &vbufs,
+                FMT,
+                Some(additive),
+                false,
+            ),
+            pipe(
+                &cubism_pl,
+                "cubism_vs",
+                "cubism_fs",
+                &vbufs,
+                FMT,
+                Some(multiply),
+                false,
+            ),
         ];
-        let mask_pipe = pipe(&cubism_pl, "cubism_vs", "mask_fs", &vbufs, MASK_FMT, Some(blend(F::One, F::One, F::One, F::One)), false);
+        let mask_pipe = pipe(
+            &cubism_pl,
+            "cubism_vs",
+            "mask_fs",
+            &vbufs,
+            MASK_FMT,
+            Some(blend(F::One, F::One, F::One, F::One)),
+            false,
+        );
         let quad_pipe = pipe(&quad_pl, "quad_vs", "quad_fs", &[], FMT, Some(normal), true);
         let blur_pipe = pipe(&quad_pl, "post_vs", "blur_fs", &[], FMT, None, true);
         let point_pipe = pipe(&quad_pl, "post_vs", "point_fs", &[], FMT, None, true);
@@ -359,14 +445,42 @@ impl Gpu {
             array_stride: 8 * 4,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 8,
+                    shader_location: 1,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 16,
+                    shader_location: 2,
+                },
             ],
         })];
         let particle_pipes = [
-            pipe(&quad_pl, "particle_vs", "particle_fs", &pvb, FMT, Some(blend(F::SrcAlpha, F::One, F::Zero, F::One)), false),
-            pipe(&quad_pl, "particle_vs", "particle_fs", &pvb, FMT, Some(blend(F::SrcAlpha, F::OneMinusSrcAlpha, F::Zero, F::One)), false),
+            pipe(
+                &quad_pl,
+                "particle_vs",
+                "particle_fs",
+                &pvb,
+                FMT,
+                Some(blend(F::SrcAlpha, F::One, F::Zero, F::One)),
+                false,
+            ),
+            pipe(
+                &quad_pl,
+                "particle_vs",
+                "particle_fs",
+                &pvb,
+                FMT,
+                Some(blend(F::SrcAlpha, F::OneMinusSrcAlpha, F::Zero, F::One)),
+                false,
+            ),
         ];
 
         let [rtw, rth] = consts::LIVE2D_RT_SIZE;
@@ -376,15 +490,30 @@ impl Gpu {
         queue.write_texture(
             dummy_mask._tex.as_image_copy(),
             &[255],
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: None },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
         let scene = tex(&device, width, height, FMT, ra);
-        let (hw, hh) = (width / consts::BLUR_DOWN_SAMPLE, height / consts::BLUR_DOWN_SAMPLE);
+        let (hw, hh) = (
+            width / consts::BLUR_DOWN_SAMPLE,
+            height / consts::BLUR_DOWN_SAMPLE,
+        );
         let half = [tex(&device, hw, hh, FMT, ra), tex(&device, hw, hh, FMT, ra)];
         let output = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("output"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -429,8 +558,16 @@ impl Gpu {
             text: ImageId(0),
             uniforms: Vec::new(),
         };
-        gpu.white = gpu.image(&image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4]))).id;
-        let t = tex(&gpu.device, width, height, FMT, wgpu::TextureUsages::empty());
+        gpu.white = gpu
+            .image(&image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4])))
+            .id;
+        let t = tex(
+            &gpu.device,
+            width,
+            height,
+            FMT,
+            wgpu::TextureUsages::empty(),
+        );
         gpu.images.push(t);
         gpu.text = ImageId(gpu.images.len() - 1);
         Ok(gpu)
@@ -442,11 +579,21 @@ impl Gpu {
         self.queue.write_texture(
             t._tex.as_image_copy(),
             img.as_raw(),
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: None },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         self.images.push(t);
-        Image { id: ImageId(self.images.len() - 1) }
+        Image {
+            id: ImageId(self.images.len() - 1),
+        }
     }
 
     pub fn text_image(&self) -> ImageId {
@@ -458,8 +605,16 @@ impl Gpu {
         self.queue.write_texture(
             self.images[id.0]._tex.as_image_copy(),
             rgba,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.width * 4), rows_per_image: None },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(self.width * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -467,12 +622,24 @@ impl Gpu {
         self.queue.write_texture(
             self.images[self.text.0]._tex.as_image_copy(),
             rgba,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.width * 4), rows_per_image: None },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(self.width * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
-    pub fn load_model(&mut self, lib: &Library, bundle: &str) -> Result<GpuModel, crate::RenderError> {
+    pub fn load_model(
+        &mut self,
+        lib: &Library,
+        bundle: &str,
+    ) -> Result<GpuModel, crate::RenderError> {
         let err = |e: String| GpuError::Model(bundle.to_owned(), e);
         let m3 = lib.load_model3(bundle)?;
         let bytes = std::fs::read(&m3.moc).map_err(|e| err(e.to_string()))?;
@@ -486,8 +653,16 @@ impl Gpu {
             self.queue.write_texture(
                 tx._tex.as_image_copy(),
                 img.as_raw(),
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: None },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
             );
             textures.push(tx);
         }
@@ -514,7 +689,12 @@ impl Gpu {
         use wgpu::util::DeviceExt;
         let vertex_count = uvs.len() / 2;
         let mk = |data: &[u8], usage| {
-            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: data, usage })
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: data,
+                    usage,
+                })
         };
         let uv_buf = mk(bytemuck::cast_slice(&uvs), wgpu::BufferUsages::VERTEX);
         let index_buf = mk(bytemuck::cast_slice(&indices), wgpu::BufferUsages::INDEX);
@@ -532,7 +712,13 @@ impl Gpu {
         });
         let [rtw, rth] = consts::LIVE2D_RT_SIZE;
         while self.masks.len() < mask_sets.len() {
-            let t = tex(&self.device, rtw / MASK_DIV, rth / MASK_DIV, MASK_FMT, wgpu::TextureUsages::RENDER_ATTACHMENT);
+            let t = tex(
+                &self.device,
+                rtw / MASK_DIV,
+                rth / MASK_DIV,
+                MASK_FMT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            );
             self.masks.push(t);
         }
         Ok(GpuModel {
@@ -551,18 +737,29 @@ impl Gpu {
 
     fn quad_bind(&mut self, image: ImageId, q: QuadGpu) -> wgpu::BindGroup {
         use wgpu::util::DeviceExt;
-        let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::bytes_of(&q),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::bytes_of(&q),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.quad_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.images[image.0].view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.images[image.0].view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
         self.uniforms.push(buf);
@@ -571,18 +768,29 @@ impl Gpu {
 
     fn view_bind(&mut self, view: &wgpu::TextureView, bytes: &[u8]) -> wgpu::BindGroup {
         use wgpu::util::DeviceExt;
-        let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytes,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.quad_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
         self.uniforms.push(buf);
@@ -615,7 +823,12 @@ impl Gpu {
         self.particles_to(enc, &out_view, draws);
     }
 
-    fn particles_to(&mut self, enc: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, draws: &[ParticleDraw]) {
+    fn particles_to(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        draws: &[ParticleDraw],
+    ) {
         use wgpu::util::DeviceExt;
         if draws.is_empty() {
             return;
@@ -624,16 +837,28 @@ impl Gpu {
         let mut verts: Vec<f32> = Vec::with_capacity(draws.len() * 6 * 8);
         for d in draws {
             for &k in &[0usize, 1, 2, 0, 2, 3] {
-                verts.extend_from_slice(&[d.corners[k][0], d.corners[k][1], d.uvs[k][0], d.uvs[k][1]]);
+                verts.extend_from_slice(&[
+                    d.corners[k][0],
+                    d.corners[k][1],
+                    d.uvs[k][0],
+                    d.uvs[k][1],
+                ]);
                 verts.extend_from_slice(&d.color);
             }
         }
-        let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("particles"),
-            contents: bytemuck::cast_slice(&verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let q = QuadGpu { rect: [0.0; 4], uv: [0.0; 4], color: [1.0; 4], target: [w, h, 0.0, 0.0] };
+        let vbuf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("particles"),
+                contents: bytemuck::cast_slice(&verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let q = QuadGpu {
+            rect: [0.0; 4],
+            uv: [0.0; 4],
+            color: [1.0; 4],
+            target: [w, h, 0.0, 0.0],
+        };
         let bgs: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.quad_bind(d.image, q)).collect();
         let mut rp = Self::pass(enc, target, None);
         rp.set_vertex_buffer(0, vbuf.slice(..));
@@ -670,7 +895,12 @@ impl Gpu {
 
     /// Renders the character's drawables into the RT (one encoder per character so the
     /// shared RT can be reused).
-    fn character(&mut self, models: &mut [GpuModel], c: &CharacterDraw, enc: &mut wgpu::CommandEncoder) {
+    fn character(
+        &mut self,
+        models: &mut [GpuModel],
+        c: &CharacterDraw,
+        enc: &mut wgpu::CommandEncoder,
+    ) {
         let m = &mut models[c.model];
         m.core.update(&c.params, None);
         let frames = m.core.drawable_frames();
@@ -681,11 +911,12 @@ impl Gpu {
                 positions.extend_from_slice(p);
             }
         }
-        self.queue.write_buffer(&m.positions, 0, bytemuck::cast_slice(&positions));
+        self.queue
+            .write_buffer(&m.positions, 0, bytemuck::cast_slice(&positions));
         let [rtw, rth] = consts::LIVE2D_RT_SIZE;
         // RenderStudio (landscape): ortho size 1.5, camera at the studio origin, model at
         // stageRoot (0, fixedStagePosition.y × orthoSize) + standPosition (0, 0.383),
-        // standScale 2.8 (`live2d.md` §5).
+        // standScale 2.8.
         let half_h = consts::LIVE2D_ORTHO_SIZE;
         let half_w = half_h * rtw as f32 / rth as f32;
         let draws: Vec<DrawGpu> = m
@@ -694,7 +925,13 @@ impl Gpu {
             .iter()
             .enumerate()
             .map(|(i, d)| DrawGpu {
-                xform: [2.8, 0.0, consts::LIVE2D_FIXED_STAGE_Y * consts::LIVE2D_ORTHO_SIZE + consts::LIVE2D_STAND_Y, 0.0],
+                xform: [
+                    2.8,
+                    0.0,
+                    consts::LIVE2D_FIXED_STAGE_Y * consts::LIVE2D_ORTHO_SIZE
+                        + consts::LIVE2D_STAND_Y,
+                    0.0,
+                ],
                 half_extent: [half_w, half_h, rtw as f32, rth as f32],
                 tint: [1.0; 4],
                 params: [
@@ -705,14 +942,24 @@ impl Gpu {
                 ],
             })
             .collect();
-        self.queue.write_buffer(&m.draws, 0, bytemuck::cast_slice(&draws));
+        self.queue
+            .write_buffer(&m.draws, 0, bytemuck::cast_slice(&draws));
 
         // bind groups (texture, mask slot)
         let mut needed: Vec<(usize, usize)> = m
             .core
             .drawables
             .iter()
-            .map(|d| (d.texture, if d.masks.is_empty() { usize::MAX } else { m.mask_sets[&d.masks] }))
+            .map(|d| {
+                (
+                    d.texture,
+                    if d.masks.is_empty() {
+                        usize::MAX
+                    } else {
+                        m.mask_sets[&d.masks]
+                    },
+                )
+            })
             .collect();
         needed.sort();
         needed.dedup();
@@ -720,18 +967,33 @@ impl Gpu {
             if m.bind_groups.contains_key(&key) {
                 continue;
             }
-            let mask_view = if key.1 == usize::MAX { &self.dummy_mask.view } else { &self.masks[key.1].view };
+            let mask_view = if key.1 == usize::MAX {
+                &self.dummy_mask.view
+            } else {
+                &self.masks[key.1].view
+            };
             let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &self.cubism_layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: m.draws.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: m.draws.as_entire_binding(),
+                    },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&m.textures[key.0.min(m.textures.len() - 1)].view),
+                        resource: wgpu::BindingResource::TextureView(
+                            &m.textures[key.0.min(m.textures.len() - 1)].view,
+                        ),
                     },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(mask_view) },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(mask_view),
+                    },
                 ],
             });
             m.bind_groups.insert(key, bg);
@@ -774,13 +1036,26 @@ impl Gpu {
                 &self.cubism_pipes[0]
             };
             rp.set_pipeline(pipe);
-            let key = (d.texture, if d.masks.is_empty() { usize::MAX } else { m.mask_sets[&d.masks] });
+            let key = (
+                d.texture,
+                if d.masks.is_empty() {
+                    usize::MAX
+                } else {
+                    m.mask_sets[&d.masks]
+                },
+            );
             rp.set_bind_group(0, &m.bind_groups[&key], &[]);
             rp.draw_indexed(fi..fi + n, fv as i32, i as u32..i as u32 + 1);
         }
     }
 
-    fn draw_quads(&self, enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, bgs: &[wgpu::BindGroup], clear: Option<wgpu::Color>) {
+    fn draw_quads(
+        &self,
+        enc: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        bgs: &[wgpu::BindGroup],
+        clear: Option<wgpu::Color>,
+    ) {
         let mut rp = Self::pass(enc, view, clear);
         rp.set_pipeline(&self.quad_pipe);
         for bg in bgs {
@@ -789,7 +1064,11 @@ impl Gpu {
         }
     }
 
-    pub fn render(&mut self, models: &mut [GpuModel], plan: &FramePlan) -> Result<Vec<u8>, GpuError> {
+    pub fn render(
+        &mut self,
+        models: &mut [GpuModel],
+        plan: &FramePlan,
+    ) -> Result<Vec<u8>, GpuError> {
         self.uniforms.clear();
         let (w, h) = (self.width as f32, self.height as f32);
         let black = Some(wgpu::Color::BLACK);
@@ -829,23 +1108,40 @@ impl Gpu {
         }
 
         let mut enc = self.device.create_command_encoder(&Default::default());
-        // `ScenarioPostProcessRenderPass.RenderBlur` (0x4A15AC4): point-sampled blit to
+        // `ScenarioPostProcessRenderPass.RenderBlur`: point-sampled blit to
         // 1/DownSample, then Iterations × (V pass, U pass) with `_BlurSize = spread·i + 1`,
         // then a point-sampled blit back. `Hidden/Sekai/Scenario/Post` offsets its taps by
-        // `_BlitTexture_TexelSize × _BlurSize`; `Blitter.BlitTexture` (0x49D9FF8) binds the
+        // `_BlitTexture_TexelSize × _BlurSize`; `Blitter.BlitTexture` binds the
         // temporary via `MaterialPropertyBlock.SetTexture(int, Texture)`, so the texel size is
         // the half-resolution one. The blur's on-screen size therefore depends on the render
-        // resolution (Q28: native = output resolution).
+        // resolution (ADR-0010: native = output resolution).
         if plan.blur > 0.001 {
             let spread = plan.blur * consts::BLUR_MAX_SPREAD;
-            let (hw, hh) = ((self.width / consts::BLUR_DOWN_SAMPLE) as f32, (self.height / consts::BLUR_DOWN_SAMPLE) as f32);
+            let (hw, hh) = (
+                (self.width / consts::BLUR_DOWN_SAMPLE) as f32,
+                (self.height / consts::BLUR_DOWN_SAMPLE) as f32,
+            );
             let scene_view = self.scene.view.clone();
             let (a, b) = (self.half[0].view.clone(), self.half[1].view.clone());
-            let blit = |this: &mut Self, enc: &mut wgpu::CommandEncoder, src: &wgpu::TextureView, dst: &wgpu::TextureView, pipe: bool, step: [f32; 2]| {
-                let p = PostGpu { step: [step[0], step[1], 0.0, 0.0], mono: [0.0; 4], tone: [0.0; 4], influence: [0.0; 4] };
+            let blit = |this: &mut Self,
+                        enc: &mut wgpu::CommandEncoder,
+                        src: &wgpu::TextureView,
+                        dst: &wgpu::TextureView,
+                        pipe: bool,
+                        step: [f32; 2]| {
+                let p = PostGpu {
+                    step: [step[0], step[1], 0.0, 0.0],
+                    mono: [0.0; 4],
+                    tone: [0.0; 4],
+                    influence: [0.0; 4],
+                };
                 let bg = this.view_bind(src, bytemuck::bytes_of(&p));
                 let mut rp = Self::pass(enc, dst, None);
-                rp.set_pipeline(if pipe { &this.blur_pipe } else { &this.point_pipe });
+                rp.set_pipeline(if pipe {
+                    &this.blur_pipe
+                } else {
+                    &this.point_pipe
+                });
                 rp.set_bind_group(0, &bg, &[]);
                 rp.draw(0..4, 0..1);
             };
@@ -863,7 +1159,12 @@ impl Gpu {
             step: [0.0; 4],
             mono: cc.map_or([0.0; 4], |c| c.mono),
             tone: cc.map_or([0.0; 4], |c| c.tone),
-            influence: [cc.map_or(0.0, |c| c.influence), if cc.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0],
+            influence: [
+                cc.map_or(0.0, |c| c.influence),
+                if cc.is_some() { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
         };
         let scene_view = self.scene.view.clone();
         let bg = self.view_bind(&scene_view, bytemuck::bytes_of(&p));
@@ -880,7 +1181,13 @@ impl Gpu {
         ui.extend(self.quads(&plan.overlay));
         ui.extend(self.quads(&plan.ui_top));
         if let Some(t) = plan.text {
-            ui.extend(self.quads(&[QuadDraw { image: Some(t), rect: [0.0, 0.0, w, h], uv: [0.0, 0.0, 1.0, 1.0], color: [1.0; 4], premultiplied: true }]));
+            ui.extend(self.quads(&[QuadDraw {
+                image: Some(t),
+                rect: [0.0, 0.0, w, h],
+                uv: [0.0, 0.0, 1.0, 1.0],
+                color: [1.0; 4],
+                premultiplied: true,
+            }]));
         }
         ui.extend(self.quads(&plan.cover));
         let out_view = self.output_view.clone();
@@ -890,9 +1197,17 @@ impl Gpu {
             self.output.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &self.readback,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.padded_row), rows_per_image: None },
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.padded_row),
+                    rows_per_image: None,
+                },
             },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
         );
         self.queue.submit([enc.finish()]);
 
@@ -902,7 +1217,10 @@ impl Gpu {
             let _ = tx.send(r);
         });
         self.device
-            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
             .map_err(|e| GpuError::Readback(e.to_string()))?;
         rx.recv()
             .map_err(|e| GpuError::Readback(e.to_string()))?
@@ -910,7 +1228,9 @@ impl Gpu {
         let row = (self.width * 4) as usize;
         let mut out = Vec::with_capacity(row * self.height as usize);
         {
-            let data = slice.get_mapped_range().map_err(|e| GpuError::Readback(e.to_string()))?;
+            let data = slice
+                .get_mapped_range()
+                .map_err(|e| GpuError::Readback(e.to_string()))?;
             for y in 0..self.height as usize {
                 let s = y * self.padded_row as usize;
                 out.extend_from_slice(&data[s..s + row]);

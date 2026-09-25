@@ -1,7 +1,6 @@
 # IR 规约 v1
 
-> **状态：v1 定稿（2026-09-24）。** 依据决策 Q32–Q39（IR-1…IR-8），见 [`../decisions.md`](../decisions.md)。
-> 游戏侧事实全部来自 [`../reverse/versions/cn-6.4.0/`](../reverse/versions/cn-6.4.0/)，本文件只引用、不重述。
+> **状态：v1 定稿（2026-09-24）。** 依据 [ADR-0008](../adr/0008-ir.md)。
 
 IR（Intermediate Representation，中间表示）是 `sse-scenario`（解析）与 `sse-timeline`（调度模拟）之间的接缝：
 
@@ -10,7 +9,7 @@ ripper-episode 索引 + ScenarioSceneData JSON
         │  sse-scenario：解析、规范化、资产引用落地
         ▼
        IR   ← 本文件（类型定义在 sse-ir）
-        │  sse-timeline：按帧复刻 Unity 协程调度（Q33）
+        │  sse-timeline：按帧复刻 Unity 协程调度（ADR-0009）
         ▼
    绝对时间轴 → sse-bake（Pass 1 参数表）→ sse-render（Pass 2）
 ```
@@ -21,12 +20,12 @@ ripper-episode 索引 + ScenarioSceneData JSON
 
 | # | 原则 | 来源 |
 |---|---|---|
-| P1 | **IR 不含任何绝对时间。** 只记录「做什么、何时可以开始、怎样算完成」；起止帧由 `sse-timeline` 模拟得到 | Q32 |
+| P1 | **IR 不含任何绝对时间。** 只记录「做什么、何时可以开始、怎样算完成」；起止帧由 `sse-timeline` 模拟得到 | ADR-0008 |
 | P2 | **一条 snippet 对应一条指令**，保留原下标、`ProgressBehavior`、`Delay`，顺序不变 | `scenario-player.md` §1 |
 | P3 | **按游戏实际消费的字段建模**。恒为 0 / 被忽略的字段不进 IR（`Speed`、`FontSize`、`TalkTention`、Move 的 `SideFrom`…），但在 §7 列明去向 | `data-model.md`、2650 剧本统计 |
 | P4 | **`StringVal` 按 `EffectType` 解析成带类型的载荷**，不以通用 string 流入下游 | `special-effects.md`「对 IR 的建议」 |
-| P5 | **不支持的内容保留且参与调度**：画面占位，完成语义照游戏 | Q35 |
-| P6 | **1:1 复刻，包括游戏自身的数据错误**；v1 无人工覆盖 | Q38 |
+| P5 | **不支持的内容保留且参与调度**：画面占位，完成语义照游戏 | ADR-0008 |
+| P6 | **1:1 复刻，包括游戏自身的数据错误**；v1 无人工覆盖 | ADR-0008 |
 | P7 | 浮点字段以 **f32** 读入（与 Unity 反序列化一致），不经 f64 中转 | determinism |
 
 ---
@@ -52,7 +51,7 @@ pub struct InitialState {
 }
 ```
 
-- `EpisodeSource.scenario_id` **取自 ripper 索引（masterdata `scenarioId`）**，不取剧本 JSON 的 `ScenarioId`（Q29 注记）。
+- `EpisodeSource.scenario_id` **取自 ripper 索引（masterdata `scenarioId`）**，不取剧本 JSON 的 `ScenarioId`。
   JSON 内的值只作为 `diagnostics` 里的对照信息保留。
 - `FirstAisacValue`：2650 剧本全部为空，v1 不建模；非空时记 `Diagnostic::IgnoredField`。
 - 容器一律 `BTreeMap` / `Vec`（determinism D 级规则）。
@@ -67,7 +66,7 @@ pub struct CastEntry {
 }
 pub struct CostumeEntry {
     pub model: Option<ModelRef>,                         // None = 游戏里加载失败（P6）
-    pub motions: BTreeMap<MotionName, MotionRef>,        // 已按「模型包 → 动作包」解析（Q29）
+    pub motions: BTreeMap<MotionName, MotionRef>,        // 已按「模型包 → 动作包」解析（ADR-0007）
 }
 ```
 
@@ -79,7 +78,7 @@ pub struct CostumeEntry {
 由 `sse-assets` 在解析期校验存在性。**缺失不在解析期报错退出**，而是：
 
 - 游戏里同样会失败的（索引 `warnings` 已列出，如 `ModelBundleMissing`）→ `Diagnostic` + 照游戏行为；
-- 索引说存在、磁盘上却没有的 → **硬错误**，列出清单并提示 `ripper rip <selector>`（Q25）。
+- 索引说存在、磁盘上却没有的 → **硬错误**，列出清单并提示 `ripper rip <selector>`（ADR-0006）。
 
 ---
 
@@ -127,7 +126,7 @@ pub struct Talk {
     pub motions: Vec<TalkMotion>,            // {character, motion?, facial?, timing_sync_value}
     pub voices: Vec<TalkVoice>,              // {character, voice: AudioRef, volume}
     pub close_window_on_finish: bool,        // WhenFinishCloseWindow
-    pub target_value_scale: f32,             // 口型幅度（Q27）
+    pub target_value_scale: f32,             // 口型幅度（ADR-0007）
     pub attached_effect: Option<Box<Effect>>,   // RequirePlayEffect（实装恒 false，仍建模）
     pub attached_sound: Option<Box<SoundOp>>,   // RequirePlaySound（同上）
 }
@@ -151,7 +150,7 @@ pub struct Talk {
 | 场景特效 | 15, 16 | `PlayScenarioEffect{name, bundle}` / `StopScenarioEffect{name}` |
 | 角色 shader | 22 | `CharacterShader{character, shader: Hologram\|Monitor\|Blur\|None, bundle, duration}` |
 | 转场 | 20, 21, 40, 41, 29–36 | `SekaiTransition{variant, dir}` / `SideFade{fade_type, duration}` |
-| 选项展示 | 23 | `SimpleSelectable{options: Vec<String>}`（按 `/` 切分）；**不是分支**（Q36） |
+| 选项展示 | 23 | `SimpleSelectable{options: Vec<String>}`（按 `/` 切分）；**不是分支**（ADR-0008） |
 | 空实现 | 0, 11, 17 | `Noop`（游戏里只 `FinishSnippet`） |
 | 不支持 | 19 Movie, 37 MusicVideo, ≥45 | `Unsupported{…}`（§4） |
 
@@ -160,7 +159,7 @@ pub struct Talk {
 
 ---
 
-## 4. 不支持的内容（Q35）
+## 4. 不支持的内容（ADR-0008）
 
 ```rust
 pub struct Unsupported {
@@ -171,12 +170,12 @@ pub struct Unsupported {
 ```
 
 - **时序必须对**：`finish` 取游戏里该指令的真实完成规则。例如 `EffectType ≥ 45` 在 6.4.0 落进 default，只 `FinishSnippet` → `FinishRule::Immediate`。
-- 画面：`sse-render` 画占位（由 Q15 的开关控制是否叠加说明文字），**默认不叠加**。
+- 画面：`sse-render` 画占位（由调试开关控制是否叠加说明文字），**默认不叠加**。
 - 完成规则无法静态确定的（如 Movie 取决于影片时长）：`FinishRule` 取可得的最佳近似并记 `Diagnostic::ApproximateTiming`，导出报告里列出。
 
 ---
 
-## 5. 分支（Q36）
+## 5. 分支（ADR-0008）
 
 ```rust
 pub struct Block { pub instrs: Vec<Node> }
@@ -185,18 +184,18 @@ pub struct Branch { pub index: u32, pub arms: Vec<Block>, pub raw: RawSnippet }
 ```
 
 - IR 保留树结构；**只有 `Action = 5 (Selectable)` 产生 `Branch`**。
-- 2650 剧本中 Action = 5 出现 0 次，分支语义（如何分臂、在哪汇合）**尚未逆向**：
-  v1 解析器遇到 Action = 5 时产出 **单臂 `Branch`**（原序列不变），调度按 `Unsupported` 处理并报警（open-question #42）。
+- 2650 剧本中 Action = 5 出现 0 次，分支语义（如何分臂、在哪汇合）**尚未实现**：
+  v1 解析器遇到 Action = 5 时产出 **单臂 `Branch`**（原序列不变），调度按 `Unsupported` 处理并报警。
 - 拍平在 `sse-timeline` 入口完成（内核不感知）：默认走第一臂；`--branch <path>` 选臂；`--all-branches` 逐一导出。
-- `SimpleSelectable (23)` 是普通特效，不产生分支。自动模式下它是否停顿、如何选择，见 open-question #41。
+- `SimpleSelectable (23)` 是普通特效，不产生分支。
 
 ---
 
 ## 6. 文本
 
-- `{{playerName}}`：用配置 `player_name` 替换，**默认值 `「世界」的居民`**，可用 `--player-name` 覆盖（Q39）。
+- `{{playerName}}`：用配置 `player_name` 替换，**默认值 `「世界」的居民`**，可用 `--player-name` 覆盖。
   替换在 IR 构建时完成（对应游戏的 `CreateFinalSerifBody`），下游只见最终文本。
-- 富文本标签**原样保留**（游戏开启富文本，`text.md`），解析交给 `sse-text`。
+- 富文本标签**原样保留**（游戏开启富文本），解析交给 `sse-text`。
 - 换行、全角标点、不可见字符不做任何规范化。
 
 ---
@@ -205,12 +204,12 @@ pub struct Branch { pub index: u32, pub arms: Vec<Block>, pub raw: RawSnippet }
 
 | 字段 | 原因 | 依据 |
 |---|---|---|
-| `TalkData.Speed`、`FontSize` | 本版本不参与打字机计算；实装恒 0 | `scenario-player.md` §5 |
-| `TalkData.TalkTention` | 枚举仅 `Normal` | `enums.yaml` |
-| `LayoutData.SideFrom`（Move 时） | Move 只用 `SideTo`；实装恒 0 | open-question #30 |
-| `FirstAisacValue` | 2650 剧本全空 | #26 |
-| `NeedBundleNames`、`IncludeSoundDataBundleNames` | 资产已由 ripper 索引解析 | Q29 |
-| Unity 残留 `m_GameObject` / `m_Script` / `m_Enabled` / `m_Name` | 非剧本数据 | `data-model.md` |
+| `TalkData.Speed`、`FontSize` | 本版本不参与打字机计算；实装恒 0 | 游戏行为 |
+| `TalkData.TalkTention` | 枚举仅 `Normal` | 游戏枚举 |
+| `LayoutData.SideFrom`（Move 时） | Move 只用 `SideTo`；实装恒 0 | 游戏行为 |
+| `FirstAisacValue` | 2650 剧本全空 | 语料统计 |
+| `NeedBundleNames`、`IncludeSoundDataBundleNames` | 资产已由 ripper 索引解析 | ADR-0007 |
+| Unity 残留 `m_GameObject` / `m_Script` / `m_Enabled` / `m_Name` | 非剧本数据 | — |
 
 上表字段**出现非预期值时**记 `Diagnostic::IgnoredField`，以便新版本数据变化时被发现。
 
@@ -233,7 +232,7 @@ pub enum Diagnostic {
 
 ---
 
-## 9. 持久化与版本（Q37）
+## 9. 持久化与版本（ADR-0008）
 
 - IR 是 `sse-ir` 中的 Rust 类型，**不是稳定的外部格式**。
 - `sse inspect <episode>` 输出带 `ir_version` 的 JSON，用于 golden test 与排查；字段顺序由类型定义决定，输出确定。
@@ -246,5 +245,4 @@ pub enum Diagnostic {
 IR 中唯一的时间量是**秒（f32）**：`delay`、各 `duration`。它们原样来自剧本或常量表，**不在 IR 里量化**。
 
 量化发生在 `sse-timeline`：以**模拟帧率**逐帧推进，按 Unity 语义累加 `elapsed += deltaTime`（f32），
-比较 `elapsed < duration` 决定是否再等一帧（Q33）。模拟帧率取游戏的帧率（Q34），导出帧由模拟帧按游戏的帧同步策略映射——
-两者的具体数值与规则待 open-question #40 确认。
+比较 `elapsed < duration` 决定是否再等一帧。模拟帧率为 60，导出 60 fps 时一个模拟帧对应一个视频帧（ADR-0009）。

@@ -1,9 +1,8 @@
 //! # sse-timeline -- timeline compiler
 //!
 //! Compiles the relative semantics of the IR into absolute simulation frames by replaying
-//! the game's `ScenarioPlayer` coroutine scheduling one frame at a time (decision Q33).
-//! **Sole owner of pacing correctness.** Behaviour references:
-//! `docs/reverse/versions/cn-6.4.0/scenario-player.md` and `special-effects.md`.
+//! the game's `ScenarioPlayer` coroutine scheduling one frame at a time (ADR-0009).
+//! **Sole owner of pacing correctness.**
 //!
 //! ## Model
 //! - Every frame, running snippet coroutines are resumed in start order, then `PlayCore`
@@ -145,14 +144,21 @@ impl MotionClips {
         }
         for i in ep.instrs() {
             match &i.kind {
-                InstrKind::Talk(t) => names.extend(t.motions.iter().filter_map(|m| m.motion.clone())),
+                InstrKind::Talk(t) => {
+                    names.extend(t.motions.iter().filter_map(|m| m.motion.clone()))
+                }
                 InstrKind::Layout(Layout {
-                    op: LayoutOp::Appear { motion: Some(m), .. },
+                    op:
+                        LayoutOp::Appear {
+                            motion: Some(m), ..
+                        },
                     ..
                 }) => {
                     names.insert(m.clone());
                 }
-                InstrKind::ChangeMotion { motion: Some(m), .. } => {
+                InstrKind::ChangeMotion {
+                    motion: Some(m), ..
+                } => {
                     names.insert(m.clone());
                 }
                 _ => {}
@@ -326,7 +332,11 @@ impl<'a> Scheduler<'a> {
     /// `ScenarioModelView` appears (display status `Appear`), optionally changing costume
     /// and body motion.
     fn appear(&mut self, id: CharacterId, costume: Option<&str>, motion: Option<&str>, frame: u32) {
-        let initial = self.ep.cast.get(&id).and_then(|c| c.initial_costume.clone());
+        let initial = self
+            .ep
+            .cast
+            .get(&id)
+            .and_then(|c| c.initial_costume.clone());
         let c = self.chars.entry(id).or_default();
         if let Some(costume) = costume {
             c.costume = Some(costume.to_owned());
@@ -341,8 +351,12 @@ impl<'a> Scheduler<'a> {
     /// clip, as the game does (`Live2DModel.RegisterMotion` miss).
     fn set_body(&mut self, id: CharacterId, motion: Option<&str>, frame: u32) {
         let Some(name) = motion else { return };
-        let Some(c) = self.chars.get_mut(&id) else { return };
-        let Some(costume) = c.costume.clone() else { return };
+        let Some(c) = self.chars.get_mut(&id) else {
+            return;
+        };
+        let Some(costume) = c.costume.clone() else {
+            return;
+        };
         if let Some(&(len, looping)) = self.motions.0.get(&(costume, name.to_owned())) {
             c.body = Some((frame, self.tb.frames_for(len), looping));
         }
@@ -354,8 +368,9 @@ impl<'a> Scheduler<'a> {
             .chars
             .iter_mut()
             .flat_map(|(id, c)| {
-                let (now, later): (Vec<_>, Vec<_>) =
-                    std::mem::take(&mut c.pending).into_iter().partition(|p| p.0 <= frame);
+                let (now, later): (Vec<_>, Vec<_>) = std::mem::take(&mut c.pending)
+                    .into_iter()
+                    .partition(|p| p.0 <= frame);
                 c.pending = later;
                 now.into_iter().map(|p| (*id, p.1)).collect::<Vec<_>>()
             })
@@ -380,8 +395,8 @@ impl<'a> Scheduler<'a> {
         let mut frame = first;
         loop {
             // 1. PlayCore. Unity resumes `yield return null` coroutines in the order they
-            //    were queued; PlayCore has been looping since the episode started, so it runs
-            //    before every snippet coroutine and sees their finishes one frame late.
+            // were queued; PlayCore has been looping since the episode started, so it runs
+            // before every snippet coroutine and sees their finishes one frame late.
             while seq < self.instrs.len() {
                 let instr = self.instrs[seq];
                 if instr.progress == Progress::WaitFinished && !self.running.is_empty() {
@@ -411,10 +426,16 @@ impl<'a> Scheduler<'a> {
                 let at = self.instrs.get(seq).map_or(u32::MAX, |i| i.index);
                 if std::env::var_os("SSE_DEBUG_STUCK").is_some() {
                     for t in &self.running {
-                        eprintln!("running snippet {} started {} wait {:?}", t.index, t.started, t.wait);
+                        eprintln!(
+                            "running snippet {} started {} wait {:?}",
+                            t.index, t.started, t.wait
+                        );
                     }
                     for (id, c) in &self.chars {
-                        eprintln!("char {id:?} shown {} body {:?} pending {:?}", c.shown, c.body, c.pending);
+                        eprintln!(
+                            "char {id:?} shown {} body {:?} pending {:?}",
+                            c.shown, c.body, c.pending
+                        );
                     }
                     eprintln!("busy {:?} window_open {}", self.busy, self.window_open);
                 }
@@ -455,11 +476,10 @@ impl<'a> Scheduler<'a> {
                 until: frame + delay_frames,
             },
         };
-        if delay_frames == 0
-            && self.advance(&mut task, frame) {
-                self.timings.get_mut(&instr.index).expect("inserted").finish = frame;
-                return;
-            }
+        if delay_frames == 0 && self.advance(&mut task, frame) {
+            self.timings.get_mut(&instr.index).expect("inserted").finish = frame;
+            return;
+        }
         self.running.push(task);
     }
 
@@ -521,15 +541,20 @@ impl<'a> Scheduler<'a> {
                         for c in self.chars.values_mut() {
                             c.pending.clear();
                         }
-                        if let Some(tt) = self.timings.get_mut(&task.index).and_then(|t| t.talk.as_mut()) {
+                        if let Some(tt) = self
+                            .timings
+                            .get_mut(&task.index)
+                            .and_then(|t| t.talk.as_mut())
+                        {
                             tt.motions.retain(|&(at, _)| at < frame);
                         }
                         // OnClick: `if (isAutoClose) Close()` → OnCompleteClose after 0.2 s
                         if let InstrKind::Talk(t) = &self.instrs[task.pos].kind
                             && t.close_window_on_finish
                         {
-                            self.window_closes_at =
-                                Some(frame + self.tb.frames_for(consts::TALK_WINDOW_OPEN_CLOSE_DURATION));
+                            self.window_closes_at = Some(
+                                frame + self.tb.frames_for(consts::TALK_WINDOW_OPEN_CLOSE_DURATION),
+                            );
                         }
                         return true;
                     }
@@ -555,7 +580,8 @@ impl<'a> Scheduler<'a> {
                     },
                     Some(voice) => {
                         // `OnFinishVoice` fires on the frame CRI reports Removed
-                        let voice_end = timing.act + self.tb.frames_for(voice + consts::VOICE_END_LATENCY);
+                        let voice_end =
+                            timing.act + self.tb.frames_for(voice + consts::VOICE_END_LATENCY);
                         if frame >= voice_end {
                             TalkStage::Gate {
                                 wait: consts::AUTO_NEXT_PAGE_DELAY,
@@ -591,7 +617,11 @@ impl<'a> Scheduler<'a> {
                         })
                     };
                 }
-                let n = if wait > 0.0 { self.tb.frames_for(wait) } else { 0 };
+                let n = if wait > 0.0 {
+                    self.tb.frames_for(wait)
+                } else {
+                    0
+                };
                 Step::Next(TalkStage::Final { until: frame + n })
             }
             TalkStage::Final { until } => {
@@ -615,7 +645,9 @@ impl<'a> Scheduler<'a> {
             })
         };
         match &instr.kind {
-            InstrKind::ChangeMotion { character, motion, .. } => {
+            InstrKind::ChangeMotion {
+                character, motion, ..
+            } => {
                 self.set_body(*character, motion.as_deref(), frame);
                 None
             }
@@ -744,11 +776,20 @@ impl<'a> Scheduler<'a> {
 
     /// `ScenarioPlayer.PlayFullScreenText` → `ScenarioFullScreenTextDialog.PlayCore`.
     /// Returns the frames until `onFinished` (→ `FinishSnippet`).
-    fn full_screen_text(&mut self, pos: usize, text: &str, voice: Option<&AudioRef>, frame: u32) -> u32 {
+    fn full_screen_text(
+        &mut self,
+        pos: usize,
+        text: &str,
+        voice: Option<&AudioRef>,
+        frame: u32,
+    ) -> u32 {
         let is_fst = |i: Option<&&Instr>| {
             matches!(
                 i.map(|i| &i.kind),
-                Some(InstrKind::Effect(Effect { op: EffectOp::FullScreenText { .. }, .. }))
+                Some(InstrKind::Effect(Effect {
+                    op: EffectOp::FullScreenText { .. },
+                    ..
+                }))
             )
         };
         let index = self.instrs[pos].index;
@@ -772,7 +813,8 @@ impl<'a> Scheduler<'a> {
         t += self.fst_slots * per_slot;
         let text_end = t;
         // do { t += dt; if (t >= 10) break; yield; } while (!isVoiceFinish)
-        let voice_end = voice.map(|a| text_start + tb.frames_for(self.durations.of(a) + consts::VOICE_END_LATENCY));
+        let voice_end = voice
+            .map(|a| text_start + tb.frames_for(self.durations.of(a) + consts::VOICE_END_LATENCY));
         t = match voice_end {
             Some(v) if v > t + 1 => v.min(t + tb.frames_for(consts::FST_VOICE_TIMEOUT)),
             _ => t + 1,
@@ -782,7 +824,10 @@ impl<'a> Scheduler<'a> {
         if last {
             t += tb.frames_for(consts::FST_PLAY_DURATION); // FadeOutAll(1) ∥ bars out (1 s)
         }
-        self.timings.get_mut(&index).expect("started").full_screen_text = Some(FstTiming {
+        self.timings
+            .get_mut(&index)
+            .expect("started")
+            .full_screen_text = Some(FstTiming {
             first,
             last,
             text_start: frame + text_start,
@@ -801,18 +846,15 @@ impl<'a> Scheduler<'a> {
         match &e.op {
             Fade { .. } | ChangeBackground { .. } | Blur { .. } | SideFade { .. } => Some(d),
             CameraMove { .. } | CameraZoom { .. } => Some(d),
-            Telop { .. } => Some(
-                consts::TELOP_ANIM_CLIP_LENGTH * 2.0 + consts::TELOP_AUTO_HOLD,
-            )
-            .map(|_| {
-                // frame-accurate: two clip plays + the hold loop, each rounded separately
-                let n = self.tb.frames_for(consts::TELOP_ANIM_CLIP_LENGTH) * 2
-                    + self.tb.frames_for(consts::TELOP_AUTO_HOLD);
-                n as f32 / self.tb.fps() as f32 - 1e-6
-            }),
+            Telop { .. } => Some(consts::TELOP_ANIM_CLIP_LENGTH * 2.0 + consts::TELOP_AUTO_HOLD)
+                .map(|_| {
+                    // frame-accurate: two clip plays + the hold loop, each rounded separately
+                    let n = self.tb.frames_for(consts::TELOP_ANIM_CLIP_LENGTH) * 2
+                        + self.tb.frames_for(consts::TELOP_AUTO_HOLD);
+                    n as f32 / self.tb.fps() as f32 - 1e-6
+                }),
             FullScreenText { .. } => unreachable!("handled by full_screen_text"),
-            // `ColorFader.Play(white, delay, Duration, FinishSnippet)` (effect handlers
-            // 0x16DD1E8 / 0x16DD4A4, 3anv 0x16DDC10 / 0x16DD11C)
+            // `ColorFader.Play(white, delay, Duration, FinishSnippet)`
             SekaiTransition { dir, .. } => {
                 let delay = match dir {
                     Direction::In => consts::SEKAI_IN_FADE_DELAY,
@@ -898,7 +940,7 @@ fn talk_motion_schedule(
     out
 }
 
-/// `TMP_Text.SetArraySizes` (`TextMeshProUGUI` 0x4B52F90): before parsing, `characterInfo`
+/// `TMP_Text.SetArraySizes` (`TextMeshProUGUI`): before parsing, `characterInfo`
 /// is resized to exactly `m_InternalTextProcessingArraySize` when that is larger (never
 /// shrunk). That size is the UTF-32 length of the source text after
 /// `TextAppearFade.Initialize` → `TrimStartLine`, rich-text tags included; the block-allocated
@@ -929,7 +971,12 @@ mod tests {
             motion_change: change,
             motions: values
                 .iter()
-                .map(|&v| TalkMotion { character: 1, motion: Some("m".into()), facial: None, timing_sync_value: v })
+                .map(|&v| TalkMotion {
+                    character: 1,
+                    motion: Some("m".into()),
+                    facial: None,
+                    timing_sync_value: v,
+                })
                 .collect(),
             voices: vec![],
             close_window_on_finish: false,
@@ -944,7 +991,10 @@ mod tests {
         let tb = TimeBase::new(60);
         // leading zeros all play synchronously
         let t = talk(MotionChangeFactor::PlayTime, &[0.0, 0.0, 0.0]);
-        assert_eq!(talk_motion_schedule(&t, 100, 112, 4, 10, tb), vec![(100, 0), (100, 1), (100, 2)]);
+        assert_eq!(
+            talk_motion_schedule(&t, 100, 112, 4, 10, tb),
+            vec![(100, 0), (100, 1), (100, 2)]
+        );
         // PlayTime: one per coroutine iteration, `time` includes this frame's dt
         let t = talk(MotionChangeFactor::PlayTime, &[0.0, 0.05, 0.01]);
         let s = talk_motion_schedule(&t, 100, 112, 4, 10, tb);
@@ -953,6 +1003,9 @@ mod tests {
         assert_eq!(s[2], (s[1].0 + 1, 2));
         // Text: exact visible-length matches only; a miss stops the chain
         let t = talk(MotionChangeFactor::Text, &[0.0, 1.0, 3.0, 2.0, 5.0]);
-        assert_eq!(talk_motion_schedule(&t, 100, 112, 4, 10, tb), vec![(100, 0), (112, 1), (120, 2)]);
+        assert_eq!(
+            talk_motion_schedule(&t, 100, 112, 4, 10, tb),
+            vec![(100, 0), (112, 1), (120, 2)]
+        );
     }
 }

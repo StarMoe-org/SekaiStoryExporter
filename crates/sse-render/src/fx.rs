@@ -1,7 +1,8 @@
 //! `fx_transition_scenario`: the Sekai transition triangles (`ScenarioPlayer.effectLayer`).
 //!
-//! Data comes from the prefab (`resources.assets|15600`) via `fx_data.rs`; this module is a
-//! CPU re-implementation of the Unity ParticleSystem modules the prefab actually enables
+//! The prefab ships inside the app, so its parameters come from the `--ui` kit
+//! (`fx_transition_scenario.json`, `sse-fx` v1, written by `tools/ui-kit/extract.py`); this
+//! module is a CPU re-implementation of the Unity ParticleSystem modules the prefab actually enables
 //! (initial, shape, emission/bursts, rotation, colour, velocity over lifetime, UV tile,
 //! noise, clamp velocity). `ScalingMode.Local` and the local simulation space mean the whole
 //! effect lives in the UI camera's orthographic world: the screen is 2 world units tall
@@ -15,26 +16,33 @@
 //! - Rotation over lifetime is applied as a full Euler rotation of the billboard (so 3D
 //!   rotation foreshortens it) rather than Unity's per-vertex rotation caching.
 
-use crate::fx_data::EMITTERS;
+use std::path::Path;
+use std::sync::Arc;
+
+use serde::Deserialize;
 
 /// `ParticleSystem.MinMaxCurve`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum Curve {
     Const(f32),
     RandConst(f32, f32),
-    Curve(&'static [Key]),
-    TwoCurves(&'static [Key], &'static [Key]),
+    #[serde(rename = "Curve")]
+    Keys(Vec<Key>),
+    TwoCurves(Vec<Key>, Vec<Key>),
 }
 
 /// One Hermite key: time, value, in-slope, out-slope.
 pub type Key = (f32, f32, f32, f32);
+
+/// A particle quad: material, corners as `[x, y]` pixels, uv rect, colour.
+pub type Billboard = (Material, [[f32; 2]; 4], [f32; 4], [f32; 4]);
 
 impl Curve {
     pub fn at(&self, t: f32) -> f32 {
         match self {
             Curve::Const(v) => *v,
             Curve::RandConst(_, max) => *max,
-            Curve::Curve(k) => sample(k, t),
+            Curve::Keys(k) => sample(k, t),
             Curve::TwoCurves(_, max) => sample(max, t),
         }
     }
@@ -87,15 +95,15 @@ fn sample(keys: &[Key], t: f32) -> f32 {
 
 /// `ParticleSystem.MinMaxGradient` in its `Gradient` mode: colour over lifetime plus a
 /// separate alpha over lifetime (TMP's gradients serialize the two tracks independently).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Gradient {
-    pub colors: &'static [(f32, f32, f32, f32)],
-    pub alphas: &'static [(f32, f32)],
+    pub colors: Vec<(f32, f32, f32, f32)>,
+    pub alphas: Vec<(f32, f32)>,
 }
 
 impl Gradient {
     fn at(&self, t: f32) -> [f32; 4] {
-        let c = match self.colors {
+        let c = match self.colors.as_slice() {
             [] => [1.0, 1.0, 1.0],
             _ => {
                 let ks: Vec<Key> = self.colors.iter().map(|k| (k.0, k.1, 0.0, 0.0)).collect();
@@ -109,7 +117,7 @@ impl Gradient {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub enum Material {
     /// `Sekai/Particles/Additive`: `tex × vertexColour`, blend SrcAlpha / One.
     Additive,
@@ -117,7 +125,7 @@ pub enum Material {
     AlphaBlended,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Burst {
     pub time: f32,
     pub count: Curve,
@@ -125,7 +133,7 @@ pub struct Burst {
     pub interval: f32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub struct Shape {
     pub angle: f32,
     pub radius: f32,
@@ -136,7 +144,7 @@ pub struct Shape {
     pub position: [f32; 3],
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Velocity {
     pub x: Curve,
     pub y: Curve,
@@ -144,8 +152,8 @@ pub struct Velocity {
     pub speed_modifier: Curve,
 }
 
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // `octaves` is 1 for every emitter; kept for the generated table
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[allow(dead_code)] // `octaves` is 1 for every emitter; kept from the prefab
 pub struct Noise {
     pub strength: f32,
     pub frequency: f32,
@@ -153,16 +161,16 @@ pub struct Noise {
     pub damping: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Clamp {
     pub limit: Curve,
     pub dampen: f32,
 }
 
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // `gravity` (0) and `length` (bursts end long before it) are table-only
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // `gravity` (0) and `length` (bursts end long before it) are unused
 pub struct Emitter {
-    pub name: &'static str,
+    pub name: String,
     pub material: Material,
     pub sorting_order: i32,
     /// `UVModule.startFrame` scaled to the 4×4 atlas' tile index.
@@ -178,7 +186,7 @@ pub struct Emitter {
     pub gravity: Curve,
     pub max_particles: u32,
     pub shape: Shape,
-    pub bursts: &'static [Burst],
+    pub bursts: Vec<Burst>,
     pub velocity: Velocity,
     pub angular_velocity: [Curve; 3],
     pub noise: Noise,
@@ -188,6 +196,33 @@ pub struct Emitter {
     /// as faithful as any: only the distribution is meaningful.
     pub auto_seed: bool,
     pub random_seed: i32,
+}
+
+/// `fx_transition_scenario.json`: the prefab's emitters in hierarchy order.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FxPrefab {
+    format: String,
+    version: u32,
+    pub emitters: Vec<Emitter>,
+}
+
+impl FxPrefab {
+    pub const FILE: &str = "fx_transition_scenario.json";
+
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let prefab: Self =
+            serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        if prefab.format != "sse-fx" || prefab.version != 1 {
+            return Err(format!(
+                "{}: expected sse-fx v1, found {} v{}",
+                path.display(),
+                prefab.format,
+                prefab.version
+            ));
+        }
+        Ok(prefab)
+    }
 }
 
 /// One live particle, in the effect's local space (world units).
@@ -216,6 +251,7 @@ struct EmitterState {
 }
 
 pub struct TransitionFx {
+    prefab: Arc<FxPrefab>,
     states: Vec<EmitterState>,
     elapsed: f32,
 }
@@ -224,14 +260,15 @@ impl TransitionFx {
     /// Starts `fx_transition_scenario` (`GameObject.Instantiate` under `effectLayer`).
     /// `instance` seeds the emitters that carry `autoRandomSeed` (the game randomises those
     /// per instance; ours is derived from the instantiation frame, so it is reproducible).
-    pub fn new(instance: u32) -> Self {
+    pub fn new(prefab: Arc<FxPrefab>, instance: u32) -> Self {
         Self {
-            states: EMITTERS
+            states: prefab
+                .emitters
                 .iter()
                 .map(|e| EmitterState {
                     particles: Vec::new(),
                     rng: if e.auto_seed {
-                        seed_of(e.name) ^ instance.wrapping_mul(2654435761)
+                        seed_of(&e.name) ^ instance.wrapping_mul(2654435761)
                     } else {
                         e.random_seed as u32
                     },
@@ -239,6 +276,7 @@ impl TransitionFx {
                     fired: Vec::new(),
                 })
                 .collect(),
+            prefab,
             elapsed: 0.0,
         }
     }
@@ -247,8 +285,10 @@ impl TransitionFx {
     /// `useUnscaledTime = false` at the scenario's frame rate.
     pub fn step(&mut self, dt: f32) {
         self.elapsed += dt;
-        for (e, st) in EMITTERS.iter().zip(self.states.iter_mut()) {
-            let Some(time) = st.time.as_mut() else { continue };
+        for (e, st) in self.prefab.emitters.iter().zip(self.states.iter_mut()) {
+            let Some(time) = st.time.as_mut() else {
+                continue;
+            };
             *time += dt;
             let t = *time;
             emit(e, st, t);
@@ -265,21 +305,27 @@ impl TransitionFx {
     /// Billboards in draw order (see the sort below).
     /// Returns `(material, corners as [x, y] pixels, uv rect, colour)`; the UV rect follows
     /// the `tex_common_tri_01` 4×4 atlas with v measured upward, as Unity samples it.
-    pub fn billboards(&self, screen: [f32; 2]) -> Vec<(Material, [[f32; 2]; 4], [f32; 4], [f32; 4])> {
+    pub fn billboards(&self, screen: [f32; 2]) -> Vec<Billboard> {
         // Same sorting layer and order (245) for every emitter, so Unity falls back to camera
         // distance, far first: the `tri_0N (1)` glow copies sit at local z = −10, nearer the
         // camera (which looks down +z), and draw over their siblings.
-        let mut order: Vec<usize> = (0..EMITTERS.len()).collect();
+        let emitters = &self.prefab.emitters;
+        let mut order: Vec<usize> = (0..emitters.len()).collect();
         order.sort_by(|&a, &b| {
-            let (ea, eb) = (&EMITTERS[a], &EMITTERS[b]);
-            ea.sorting_order.cmp(&eb.sorting_order).then(eb.position[2].total_cmp(&ea.position[2]))
+            let (ea, eb) = (&emitters[a], &emitters[b]);
+            ea.sorting_order
+                .cmp(&eb.sorting_order)
+                .then(eb.position[2].total_cmp(&ea.position[2]))
         });
         let world_h = 2.0;
         let px_per_unit = screen[1] / world_h;
         let mut out = Vec::new();
         for i in order {
-            let e = &EMITTERS[i];
-            let base = [e.tile.rem_euclid(4.0) as u32, (e.tile / 4.0).floor().max(0.0) as u32];
+            let e = &emitters[i];
+            let base = [
+                e.tile.rem_euclid(4.0) as u32,
+                (e.tile / 4.0).floor().max(0.0) as u32,
+            ];
             for p in &self.states[i].particles {
                 let t = (p.age / p.life).clamp(0.0, 1.0);
                 let c = e.color.at(t);
@@ -294,10 +340,18 @@ impl TransitionFx {
                     let q = rot_euler(*corner, p.rot);
                     let w = [p.pos[0] + q[0], p.pos[1] + q[1], p.pos[2] + q[2]];
                     // EffectLayer's world is the UI camera's: origin centred, y up.
-                    pts[k] = [screen[0] * 0.5 + w[0] * px_per_unit, screen[1] * 0.5 - w[1] * px_per_unit];
+                    pts[k] = [
+                        screen[0] * 0.5 + w[0] * px_per_unit,
+                        screen[1] * 0.5 - w[1] * px_per_unit,
+                    ];
                 }
                 let (tw, th) = (1.0 / 4.0, 1.0 / 4.0);
-                let uv = [base[0] as f32 * tw, 1.0 - (base[1] + 1) as f32 * th, (base[0] + 1) as f32 * tw, 1.0 - base[1] as f32 * th];
+                let uv = [
+                    base[0] as f32 * tw,
+                    1.0 - (base[1] + 1) as f32 * th,
+                    (base[0] + 1) as f32 * tw,
+                    1.0 - base[1] as f32 * th,
+                ];
                 out.push((e.material, pts, uv, c));
             }
         }
@@ -305,15 +359,13 @@ impl TransitionFx {
     }
 }
 
-impl Default for TransitionFx {
-    fn default() -> Self {
-        Self::new(0)
-    }
-}
-
 /// `Quaternion.Euler(x, y, z)` = `Ry·Rx·Rz` (Unity's yaw·pitch·roll order).
 fn rot_euler(v: [f32; 3], deg: [f32; 3]) -> [f32; 3] {
-    let (rx, ry, rz) = (deg[0].to_radians(), deg[1].to_radians(), deg[2].to_radians());
+    let (rx, ry, rz) = (
+        deg[0].to_radians(),
+        deg[1].to_radians(),
+        deg[2].to_radians(),
+    );
     let (sx, cx) = rx.sin_cos();
     let (sy, cy) = ry.sin_cos();
     let (sz, cz) = rz.sin_cos();
@@ -394,7 +446,11 @@ fn spawn(e: &Emitter, rng: &mut u32) -> Particle {
     let a = e.shape.angle.to_radians() * 0.5;
     let (sa, ca) = (unit(rng) * a).sin_cos();
     let local_pos = [r * ct * e.shape.scale[0], r * st_ * e.shape.scale[1], 0.0];
-    let local_dir = [sa * st_ * e.shape.scale[0], sa * ct * e.shape.scale[1], ca * e.shape.scale[2]];
+    let local_dir = [
+        sa * st_ * e.shape.scale[0],
+        sa * ct * e.shape.scale[1],
+        ca * e.shape.scale[2],
+    ];
     let q = rot_euler(local_pos, e.shape.rotation);
     let d = rot_euler(local_dir, e.shape.rotation);
     let pos = [
@@ -404,7 +460,17 @@ fn spawn(e: &Emitter, rng: &mut u32) -> Particle {
     ];
     let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
     let vel = [d[0] / len * speed, d[1] / len * speed, d[2] / len * speed];
-    Particle { pos, vel, age: 0.0, life, size, rot, ang_vel, seed: next_u32(rng), rng: next_u32(rng) | 1 }
+    Particle {
+        pos,
+        vel,
+        age: 0.0,
+        life,
+        size,
+        rot,
+        ang_vel,
+        seed: next_u32(rng),
+        rng: next_u32(rng) | 1,
+    }
 }
 
 fn update(e: &Emitter, st: &mut EmitterState, dt: f32) {
@@ -477,7 +543,12 @@ fn noise_field(pos: [f32; 3], freq: f32, seed: u32) -> (f32, f32, f32) {
     let y = pos[1] * freq;
     let z = pos[2] * freq;
     let axis = |a: u32| {
-        let v = vnoise(x + a as f32 * 37.0, y + a as f32 * 11.0, z + a as f32 * 53.0, seed.wrapping_add(a));
+        let v = vnoise(
+            x + a as f32 * 37.0,
+            y + a as f32 * 11.0,
+            z + a as f32 * 53.0,
+            seed.wrapping_add(a),
+        );
         v * 2.0 - 1.0
     };
     (axis(0), axis(1), axis(2))
@@ -516,7 +587,12 @@ mod tests {
     fn euler_matches_unity_yaw_pitch_roll() {
         // the prefab's cone rotation (-35, -90, 0): the axis must point up-left
         let axis = rot_euler([0.0, 0.0, 1.0], [-35.0, -90.0, 0.0]);
-        assert!((axis[0] + 0.819).abs() < 1e-3 && (axis[1] - 0.574).abs() < 1e-3 && axis[2].abs() < 1e-3, "{axis:?}");
+        assert!(
+            (axis[0] + 0.819).abs() < 1e-3
+                && (axis[1] - 0.574).abs() < 1e-3
+                && axis[2].abs() < 1e-3,
+            "{axis:?}"
+        );
     }
 
     #[test]
@@ -528,12 +604,31 @@ mod tests {
     }
 
     #[test]
-    fn bursts_emit_the_prefab_counts() {
-        // nomal 3 × 20, lone_slow 7 × 1 × 3 cycles, line 6 × 5 × 2 cycles = 141
-        let mut fx = TransitionFx::new(1);
+    fn bursts_fire_once_per_cycle() {
+        let json = r#"{"format": "sse-fx", "version": 1, "emitters": [{
+            "name": "a", "material": "Additive", "sorting_order": 245, "tile": 0.0,
+            "position": [0.0, 0.0, 0.0], "lifetime": {"Const": 5.0}, "speed": {"Const": 1.0},
+            "size": {"RandConst": [0.1, 0.4]}, "rotation": {"Const": 0.0},
+            "rotation_x": {"Const": 0.0}, "rotation_y": {"Const": 0.0},
+            "color": {"colors": [[0.0, 1.0, 1.0, 1.0]], "alphas": [[0.0, 1.0], [1.0, 0.0]]},
+            "gravity": {"Const": 0.0}, "max_particles": 1000,
+            "shape": {"angle": 35.0, "radius": 0.8, "rotation": [0.0, 0.0, 0.0],
+                      "scale": [1.0, 1.0, 1.0], "position": [0.0, 0.0, 0.0]},
+            "bursts": [{"time": 0.0, "count": {"Const": 20.0}, "cycles": 1, "interval": 0.01},
+                       {"time": 0.1, "count": {"Const": 7.0}, "cycles": 3, "interval": 0.2}],
+            "velocity": {"x": {"Const": 0.0}, "y": {"Const": 0.0}, "z": {"Const": 0.0},
+                         "speed_modifier": {"Const": 1.0}},
+            "angular_velocity": [{"RandConst": [0.0, 0.0]}, {"RandConst": [0.0, 0.0]},
+                                 {"RandConst": [-1.0, 1.0]}],
+            "noise": {"strength": 0.0, "frequency": 0.5, "octaves": 1, "damping": true},
+            "clamp": null, "length": 5.0, "auto_seed": true, "random_seed": 0
+        }]}"#;
+        let prefab: FxPrefab = serde_json::from_str(json).unwrap();
+        let mut fx = TransitionFx::new(Arc::new(prefab), 1);
         for _ in 0..60 {
             fx.step(1.0 / 60.0);
         }
-        assert_eq!(fx.len(), 141);
+        // 20 + 7 × 3 cycles (0.1, 0.3, 0.5 s)
+        assert_eq!(fx.len(), 41);
     }
 }

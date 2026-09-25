@@ -1,5 +1,5 @@
 //! `ScenarioSceneData` as serialised by the ripper (typetree JSON). Field names are the
-//! game's C# names, typos included (`docs/reverse/versions/cn-6.4.0/data-model.md`).
+//! game's C# names, typos included.
 //! Unity serialises `bool` as `0/1`, so booleans accept either form.
 
 use serde::{Deserialize, Deserializer};

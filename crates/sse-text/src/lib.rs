@@ -1,11 +1,11 @@
 //! # sse-text -- text layout and rasterisation
 //!
-//! First version (decision Round 8: rasterise the game font directly; the TMP SDF path of
-//! Q11 replaces it later). Everything runs on the CPU in pure Rust, so the output is
+//! Rasterises the client's source font directly (ADR-0011). Everything runs on the CPU in pure Rust, so the output is
 //! identical on every platform.
 //!
-//! ## What is reproduced (`docs/reverse/versions/cn-6.4.0/text.md`)
-//! - Source Han Sans SC Medium (body) / Bold (name); em size = TMP `fontSize`
+//! ## What is reproduced
+//! - The client's FOT-RodinNTLG Pro DB (body) / EB (name) source fonts (Source Han Sans SC on
+//!   CN); em size = TMP `fontSize`
 //! - Line advance `(ascent − descent)·s + (lineHeight − pointSize)·s + lineSpacing·size·0.01`
 //!   with FaceInfo pointSize 35 / lineHeight 70 / ascent 30.8 / descent −4.2, `lineSpacing` −80
 //! - Auto-size between min and max (1 pt steps) + truncate
@@ -47,7 +47,10 @@ impl Font {
     pub fn preferred_width(&self, text: &str, size: f32, spacing: f32) -> f32 {
         let sf = self.font.as_scaled(self.em(size));
         let n = text.chars().count();
-        let advances: f32 = text.chars().map(|c| sf.h_advance(self.font.glyph_id(c))).sum();
+        let advances: f32 = text
+            .chars()
+            .map(|c| sf.h_advance(self.font.glyph_id(c)))
+            .sum();
         advances + spacing * size * 0.01 * n.saturating_sub(1) as f32
     }
 
@@ -86,7 +89,9 @@ pub struct Style {
 impl Style {
     pub fn line_advance(&self, size: f32) -> f32 {
         let s = size / POINT_SIZE;
-        (ASCENT - DESCENT) * s + (LINE_HEIGHT - (ASCENT - DESCENT)) * s + self.line_spacing * size * 0.01
+        (ASCENT - DESCENT) * s
+            + (LINE_HEIGHT - (ASCENT - DESCENT)) * s
+            + self.line_spacing * size * 0.01
     }
 }
 
@@ -184,9 +189,11 @@ fn layout(font: &Font, chars: &[(char, u32)], size: f32, width: f32, spacing: f3
                 }
             }
             if let Some(last) = out.last()
-                && last.line == line && NO_LINE_END.contains(last.c) {
-                    carry = carry.max(1);
-                }
+                && last.line == line
+                && NO_LINE_END.contains(last.c)
+            {
+                carry = carry.max(1);
+            }
             line += 1;
             x = 0.0;
             let start = out.len() - carry.min(out.len());
@@ -197,7 +204,13 @@ fn layout(font: &Font, chars: &[(char, u32)], size: f32, width: f32, spacing: f3
                 x += sf.h_advance(font.font.glyph_id(p.c)) + gap;
             }
         }
-        out.push(Placed { c, idx: i, x, line, units_end: u });
+        out.push(Placed {
+            c,
+            idx: i,
+            x,
+            line,
+            units_end: u,
+        });
         x += adv + gap;
         i += 1;
     }
@@ -230,7 +243,16 @@ pub fn draw(
     style: &Style,
     alpha: f32,
 ) {
-    draw_faded(canvas, font, raw, visible_units, frame, style, alpha, &|_| 1.0);
+    draw_faded(
+        canvas,
+        font,
+        raw,
+        visible_units,
+        frame,
+        style,
+        alpha,
+        &|_| 1.0,
+    );
 }
 
 /// [`draw`] with a per-character alpha, indexed like TMP's `characterInfo` (rich-text tags
@@ -252,7 +274,8 @@ pub fn draw_faded(
     let placed = loop {
         let placed = layout(font, &chars, size, frame.width, style.char_spacing);
         let lines = placed.last().map_or(1, |p| p.line + 1) as f32;
-        let height = (ASCENT - DESCENT) * size / POINT_SIZE + (lines - 1.0) * style.line_advance(size);
+        let height =
+            (ASCENT - DESCENT) * size / POINT_SIZE + (lines - 1.0) * style.line_advance(size);
         if !style.auto_size || height <= frame.height || size <= style.min_size {
             break placed;
         }
@@ -262,7 +285,8 @@ pub fn draw_faded(
     let advance = style.line_advance(size) * frame.scale;
     let ascent = ASCENT * size / POINT_SIZE * frame.scale;
     let lines = placed.last().map_or(1, |p| p.line + 1);
-    let block_h = (ASCENT - DESCENT) * size / POINT_SIZE * frame.scale + (lines - 1) as f32 * advance;
+    let block_h =
+        (ASCENT - DESCENT) * size / POINT_SIZE * frame.scale + (lines - 1) as f32 * advance;
     let top = frame.y + (frame.height * frame.scale - block_h) * frame.valign;
     let sf = font.font.as_scaled(font.em(px_size));
     let mut line_w = vec![0.0_f32; lines];
@@ -270,7 +294,10 @@ pub fn draw_faded(
         let w = (p.x + sf.h_advance(font.font.glyph_id(p.c)) / frame.scale) * frame.scale;
         line_w[p.line] = line_w[p.line].max(w);
     }
-    let visible: Vec<&Placed> = placed.iter().filter(|p| p.units_end <= visible_units).collect();
+    let visible: Vec<&Placed> = placed
+        .iter()
+        .filter(|p| p.units_end <= visible_units)
+        .collect();
     let dilate = 1.7 * size / 40.0 * frame.scale;
     // pass 0: underlay, 1: outline, 2: face
     for pass in 0..3 {
@@ -297,7 +324,9 @@ pub fn draw_faded(
                 .font
                 .glyph_id(p.c)
                 .with_scale_and_position(font.em(px_size), ab_glyph::point(gx, gy));
-            let Some(outline) = font.font.outline_glyph(glyph) else { continue };
+            let Some(outline) = font.font.outline_glyph(glyph) else {
+                continue;
+            };
             let b = outline.px_bounds();
             let (bw, bh) = (b.width() as usize, b.height() as usize);
             let mut cov = vec![0.0_f32; bw * bh];
@@ -313,7 +342,13 @@ pub fn draw_faded(
                 for y in 0..bh {
                     for x in 0..bw {
                         let c = cov[y * bw + x] * color[3] * alpha;
-                        put(canvas, b.min.x as i64 + x as i64, b.min.y as i64 + y as i64, color, c);
+                        put(
+                            canvas,
+                            b.min.x as i64 + x as i64,
+                            b.min.y as i64 + y as i64,
+                            color,
+                            c,
+                        );
                     }
                 }
             }
@@ -325,7 +360,11 @@ fn put(canvas: &mut Canvas, x: i64, y: i64, color: [f32; 4], a: f32) {
     if a <= 0.0 || x < 0 || y < 0 || x >= canvas.width as i64 || y >= canvas.height as i64 {
         return;
     }
-    canvas.blend(x as usize, y as usize, [color[0] * a, color[1] * a, color[2] * a, a]);
+    canvas.blend(
+        x as usize,
+        y as usize,
+        [color[0] * a, color[1] * a, color[2] * a, a],
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -358,7 +397,13 @@ fn draw_outline(
             }
             // alpha test (`col.a < 0.1 → discard`), then a solid fill
             if m >= 0.1 {
-                put(canvas, ox as i64 - ri + x, oy as i64 - ri + y, color, color[3] * alpha);
+                put(
+                    canvas,
+                    ox as i64 - ri + x,
+                    oy as i64 - ri + y,
+                    color,
+                    color[3] * alpha,
+                );
             }
         }
     }

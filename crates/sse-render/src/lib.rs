@@ -8,7 +8,7 @@
 //! > **This crate must not depend on `sse-timeline` or `sse-scenario`.**
 //! > Rendering only ever sees the parameter table (`sse-params`).
 //!
-//! ## Pipeline (per frame, reference: `docs/reverse/versions/cn-6.4.0/rendering.md`, `live2d.md`)
+//! ## Pipeline (per frame)
 //! 1. Background: base 2338×1440 with cover-but-never-shrink; crossfade previous → current
 //! 2. Each character: Cubism drawables into a transparent 2304×1536 RT (premultiplied,
 //!    per-drawable masks, Normal / Additive / Multiply blends), then composited with
@@ -22,7 +22,6 @@
 
 mod effect;
 mod fx;
-mod fx_data;
 mod gpu;
 mod movie;
 mod native_ui;
@@ -83,7 +82,7 @@ impl RenderConfig {
     }
 }
 
-/// `ScenarioLayer` (the characters) canvas sorting order (`rendering.md` §1): effects sorted
+/// `ScenarioLayer` (the characters) canvas sorting order: effects sorted
 /// below it are drawn before the characters.
 const SCENARIO_LAYER_ORDER: i32 = 220;
 
@@ -103,8 +102,9 @@ pub struct Renderer {
     text_key: Option<String>,
     lib: Library,
     fps: u32,
-    /// `tex_common_tri_01` (the transition triangles' 4×4 atlas), from the `--ui` dir.
-    fx_atlas: Option<gpu::Image>,
+    /// `tex_common_tri_01` (the transition triangles' 4×4 atlas) and the prefab's particle
+    /// systems, from the `--ui` dir; the transition is not drawn without both.
+    fx: Option<(gpu::Image, std::sync::Arc<fx::FxPrefab>)>,
     /// `tex_transition_top` / `tex_transition_left` (the side fade's feathered edges).
     side_edges: Option<(gpu::Image, gpu::Image)>,
     /// Scenario effect prefabs by (bundle, name); `None` when loading failed.
@@ -126,22 +126,33 @@ impl Renderer {
         for bundle in &table.models {
             models.push(gpu.load_model(lib, bundle)?);
         }
-        let load_ui = |gpu: &mut gpu::Gpu, p: &Option<PathBuf>| -> Result<Option<gpu::Image>, RenderError> {
-            match p {
-                Some(p) => Ok(Some(gpu.image(&sse_assets::load_png(p)?))),
-                None => Ok(None),
-            }
-        };
+        let load_ui =
+            |gpu: &mut gpu::Gpu, p: &Option<PathBuf>| -> Result<Option<gpu::Image>, RenderError> {
+                match p {
+                    Some(p) => Ok(Some(gpu.image(&sse_assets::load_png(p)?))),
+                    None => Ok(None),
+                }
+            };
         let dialog_overlay = load_ui(&mut gpu, &ui.dialog)?;
         let native = native_ui::NativeUi::load(&mut gpu, &ui.sprites);
         let movie_image = gpu.image(&image::RgbaImage::new(cfg.width, cfg.height));
-        let fx_atlas = sse_assets::load_png(&ui.sprites.join("tex_common_tri_01.png")).ok().map(|i| gpu.image(&i));
+        let fx = match (
+            sse_assets::load_png(&ui.sprites.join("tex_common_tri_01.png")).ok(),
+            fx::FxPrefab::load(&ui.sprites.join(fx::FxPrefab::FILE)).ok(),
+        ) {
+            (Some(atlas), Some(prefab)) => Some((gpu.image(&atlas), std::sync::Arc::new(prefab))),
+            _ => None,
+        };
         let edge = |n: &str| sse_assets::load_png(&ui.sprites.join(n)).ok();
-        let side_edges = match (edge("tex_transition_top.png"), edge("tex_transition_left.png")) {
+        let side_edges = match (
+            edge("tex_transition_top.png"),
+            edge("tex_transition_left.png"),
+        ) {
             (Some(t), Some(l)) => Some((gpu.image(&t), gpu.image(&l))),
             _ => None,
         };
-        let font = |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
+        let font =
+            |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
         Ok(Self {
             body_font: font(&ui.font_body)?,
             name_font: font(&ui.font_name)?,
@@ -151,17 +162,27 @@ impl Renderer {
             ui,
             dialog_overlay,
             native,
-            movie: movie::MovieDecoder::new("ffmpeg".into(), cfg.width, cfg.height, movie_rect(&cfg), table.fps),
+            movie: movie::MovieDecoder::new(
+                "ffmpeg".into(),
+                cfg.width,
+                cfg.height,
+                movie_rect(&cfg),
+                table.fps,
+            ),
             movie_image,
             movie_key: None,
             text_key: None,
             lib: lib.clone(),
             fps: table.fps,
-            fx_atlas,
+            fx,
             side_edges,
             prefabs: BTreeMap::new(),
             effects: BTreeMap::new(),
-            white: gpu.image(&image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]))),
+            white: gpu.image(&image::RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([255, 255, 255, 255]),
+            )),
             gpu,
         })
     }
@@ -206,8 +227,13 @@ impl Renderer {
         }
         if let Some(cur) = &frame.background.current {
             let id = self.image(cur)?;
-            let a = if frame.background.previous.is_some() { frame.background.mix } else { 1.0 };
-            plan.scene.push(gpu::QuadDraw::image(id, bg_rect, [1.0, 1.0, 1.0, a]));
+            let a = if frame.background.previous.is_some() {
+                frame.background.mix
+            } else {
+                1.0
+            };
+            plan.scene
+                .push(gpu::QuadDraw::image(id, bg_rect, [1.0, 1.0, 1.0, a]));
         }
 
         // 2. characters (in order, each composited right after its RT render)
@@ -216,7 +242,7 @@ impl Renderer {
             let s = content[1] * c.scale / consts::LIVE2D_SCALE_REFERENCE_HEIGHT;
             let (qw, qh) = (rtw as f32 * s * k, rth as f32 * s * k);
             let cx = (content[0] * 0.5 + c.x) * k;
-            // `Live2DModelView.UpdateRenderOrientation` (0x3CF9050): anchors (0.5, 0), prefab
+            // `Live2DModelView.UpdateRenderOrientation`: anchors (0.5, 0), prefab
             // pivot (0.5, 0), `anchoredPosition` = transform data (x, y) — the RT's bottom
             // edge sits on the screen's bottom edge (`scenarioLayer` fills the screen).
             let top = h - qh - c.y * k;
@@ -246,8 +272,8 @@ impl Renderer {
         self.scenario_effects(frame, &mut plan, content, k, [w, h])?;
 
         // EffectLayer: `fx_transition_scenario`, re-simulated from its instantiation
-        if let (Some(fx), Some(atlas)) = (&frame.fx, &self.fx_atlas) {
-            let mut sim = fx::TransitionFx::new(fx.seed);
+        if let (Some(fx), Some((atlas, prefab))) = (&frame.fx, &self.fx) {
+            let mut sim = fx::TransitionFx::new(prefab.clone(), fx.seed);
             let dt = 1.0 / self.fps as f32;
             for _ in 0..fx.age_frames {
                 sim.step(dt);
@@ -260,7 +286,12 @@ impl Renderer {
                     additive: mat == fx::Material::Additive,
                     image: atlas.id,
                     corners,
-                    uvs: [[u0, 1.0 - v0], [u1, 1.0 - v0], [u1, 1.0 - v1], [u0, 1.0 - v1]],
+                    uvs: [
+                        [u0, 1.0 - v0],
+                        [u1, 1.0 - v0],
+                        [u1, 1.0 - v1],
+                        [u0, 1.0 - v1],
+                    ],
                     color,
                 });
             }
@@ -268,45 +299,67 @@ impl Renderer {
 
         // 3. fader, post
         if frame.fader[3] > 0.0 {
-            plan.overlay.push(gpu::QuadDraw::solid([0.0, 0.0, w, h], frame.fader));
+            plan.overlay
+                .push(gpu::QuadDraw::solid([0.0, 0.0, w, h], frame.fader));
         }
         plan.blur = frame.blur;
         plan.camera_color = frame.camera_color;
 
         // 4. UI
         if let Some(m) = &frame.movie {
-            plan.ui_top.push(gpu::QuadDraw::solid([0.0, 0.0, w, h], [0.0, 0.0, 0.0, 1.0]));
+            plan.ui_top
+                .push(gpu::QuadDraw::solid([0.0, 0.0, w, h], [0.0, 0.0, 0.0, 1.0]));
             if let Some(file) = &m.file {
                 let index = (m.time * self.movie_fps() as f32).round() as u32;
                 let key = (file.clone(), index);
                 if self.movie_key.as_ref() != Some(&key) {
                     let path = self.lib.path(file);
-                    let rgba = self.movie.frame(&path, index).map_err(RenderError::Other)?.to_vec();
+                    let rgba = self
+                        .movie
+                        .frame(&path, index)
+                        .map_err(RenderError::Other)?
+                        .to_vec();
                     self.gpu.upload_image(self.movie_image.id, &rgba);
                     self.movie_key = Some(key);
                 }
-                plan.ui_top.push(gpu::QuadDraw::image(self.movie_image.id, [0.0, 0.0, w, h], [1.0; 4]));
+                plan.ui_top.push(gpu::QuadDraw::image(
+                    self.movie_image.id,
+                    [0.0, 0.0, w, h],
+                    [1.0; 4],
+                ));
             }
         }
         if let Some(t) = &frame.talk {
             if self.native.has_window() {
                 let first = plan.ui.len();
-                let auto_w = self.name_font.preferred_width("AUTO", native_ui::layout::AUTO_TEXT_SIZE, native_ui::layout::AUTO_TEXT_SPACING);
-                self.native.talk(&mut plan.ui, k, t.window_alpha, t.auto_time, auto_w);
+                let auto_w = self.name_font.preferred_width(
+                    "AUTO",
+                    native_ui::layout::AUTO_TEXT_SIZE,
+                    native_ui::layout::AUTO_TEXT_SPACING,
+                );
+                self.native
+                    .talk(&mut plan.ui, k, t.window_alpha, t.auto_time, auto_w);
                 // ShakeWindow moves `windowRectTransform` (the window, name and words)
                 let [wx, wy] = frame.window_shake;
                 for q in &mut plan.ui[first..] {
                     q.translate(wx * k, -wy * k);
                 }
             } else if let Some(img) = &self.dialog_overlay {
-                plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0, 1.0, 1.0, t.window_alpha]));
+                plan.ui.push(gpu::QuadDraw::image(
+                    img.id,
+                    [0.0, 0.0, w, h],
+                    [1.0, 1.0, 1.0, t.window_alpha],
+                ));
             }
         }
         if frame.menu_alpha > 0.0 {
             self.native.menu(&mut plan.ui, k, frame.menu_alpha);
         }
         native_ui::cinemascope(&mut plan.ui_top, k, w, h, frame.cinemascope);
-        let telop_text = frame.telop.as_ref().map(|t| self.native.telop(&mut plan.ui, k, t.show, t.hide));
+        let telop_text = frame
+            .telop
+            .as_ref()
+            .map(|t| self.native.telop(&mut plan.ui, k, t.show, t.hide));
         if let Some(p) = &frame.place_info {
             self.native.place_info(&mut plan.ui, k, p.x);
         }
@@ -332,15 +385,25 @@ impl Renderer {
         for e in &frame.effects {
             let pk = (e.bundle.clone(), e.name.clone());
             if !self.prefabs.contains_key(&pk) {
-                let p = effect::Prefab::load(&self.lib, &e.bundle, &e.name).ok().map(std::sync::Arc::new);
+                let p = effect::Prefab::load(&self.lib, &e.bundle, &e.name)
+                    .ok()
+                    .map(std::sync::Arc::new);
                 self.prefabs.insert(pk.clone(), p);
             }
-            let Some(prefab) = self.prefabs[&pk].clone() else { continue };
+            let Some(prefab) = self.prefabs[&pk].clone() else {
+                continue;
+            };
             let key = (e.bundle.clone(), e.name.clone(), e.seed);
             keep.insert(key.clone());
-            let stale = self.effects.get(&key).is_none_or(|(_, age)| *age > e.age_frames);
+            let stale = self
+                .effects
+                .get(&key)
+                .is_none_or(|(_, age)| *age > e.age_frames);
             if stale {
-                self.effects.insert(key.clone(), (effect::EffectInstance::new(prefab, e.seed, dt), 0));
+                self.effects.insert(
+                    key.clone(),
+                    (effect::EffectInstance::new(prefab, e.seed, dt), 0),
+                );
             }
             let (inst, age) = self.effects.get_mut(&key).expect("inserted");
             if e.stop_age == Some(*age) {
@@ -356,14 +419,30 @@ impl Renderer {
         }
         self.effects.retain(|k, _| keep.contains(k));
         let [sx, sy] = frame.scenario_shake;
-        let to_screen = |p: [f32; 2]| [screen[0] * 0.5 + (p[0] + sx) * k, screen[1] * 0.5 - (p[1] + sy) * k];
-        let quads: Vec<effect::EffectQuad> = self.effects.values().flat_map(|(inst, _)| inst.quads(content)).collect();
+        let to_screen = |p: [f32; 2]| {
+            [
+                screen[0] * 0.5 + (p[0] + sx) * k,
+                screen[1] * 0.5 - (p[1] + sy) * k,
+            ]
+        };
+        let quads: Vec<effect::EffectQuad> = self
+            .effects
+            .values()
+            .flat_map(|(inst, _)| inst.quads(content))
+            .collect();
         if std::env::var_os("SSE_DEBUG_EFFECTS").is_some() {
             for ((b, n, s), (inst, age)) in &self.effects {
                 let q = inst.quads(content);
-                eprintln!("effect {b} {n} seed {s} age {age} finished {} quads {}", inst.finished, q.len());
+                eprintln!(
+                    "effect {b} {n} seed {s} age {age} finished {} quads {}",
+                    inst.finished,
+                    q.len()
+                );
                 for x in q.iter().take(4) {
-                    eprintln!("   order {} corners {:?} color {:?} tex {:?}", x.order, x.corners, x.color, x.tex);
+                    eprintln!(
+                        "   order {} corners {:?} color {:?} tex {:?}",
+                        x.order, x.corners, x.color, x.tex
+                    );
                 }
             }
         }
@@ -405,17 +484,32 @@ impl Renderer {
         // root rect in canvas pixels, top-left origin
         let (x0, y0, rw, rh) = (-32.0 + p[0], -32.0 - p[1], cw + 64.0, ch + 64.0);
         let px = |r: [f32; 4]| [r[0] * k, r[1] * k, r[2] * k, r[3] * k];
-        out.push(gpu::QuadDraw::solid(px([x0, y0, rw, rh]), [0.0, 0.0, 0.0, 1.0]));
-        let Some((top, left)) = &self.side_edges else { return };
+        out.push(gpu::QuadDraw::solid(
+            px([x0, y0, rw, rh]),
+            [0.0, 0.0, 0.0, 1.0],
+        ));
+        let Some((top, left)) = &self.side_edges else {
+            return;
+        };
         // horizontal strips: tiles run left → right from x0
         let mut x = 0.0;
         while x < rw {
             let tw = (rw - x).min(EDGE);
             let u1 = tw / EDGE;
             // top: dense rows (image bottom) against the panel
-            out.push(gpu::QuadDraw::image_uv(top.id, px([x0 + x, y0 - EDGE, tw, EDGE]), [0.0, TRIM, u1, 1.0], [1.0; 4]));
+            out.push(gpu::QuadDraw::image_uv(
+                top.id,
+                px([x0 + x, y0 - EDGE, tw, EDGE]),
+                [0.0, TRIM, u1, 1.0],
+                [1.0; 4],
+            ));
             // bottom: y-mirror
-            out.push(gpu::QuadDraw::image_uv(top.id, px([x0 + x, y0 + rh, tw, EDGE]), [0.0, 1.0, u1, TRIM], [1.0; 4]));
+            out.push(gpu::QuadDraw::image_uv(
+                top.id,
+                px([x0 + x, y0 + rh, tw, EDGE]),
+                [0.0, 1.0, u1, TRIM],
+                [1.0; 4],
+            ));
             x += EDGE;
         }
         // vertical strips: tiles run bottom → top (Unity y) from the root's bottom
@@ -425,25 +519,61 @@ impl Renderer {
             let v0 = 1.0 - th / EDGE;
             let ty = y0 + rh - y - th;
             // left: dense columns (image right) against the panel
-            out.push(gpu::QuadDraw::image_uv(left.id, px([x0 - EDGE, ty, EDGE, th]), [TRIM, v0, 1.0, 1.0], [1.0; 4]));
+            out.push(gpu::QuadDraw::image_uv(
+                left.id,
+                px([x0 - EDGE, ty, EDGE, th]),
+                [TRIM, v0, 1.0, 1.0],
+                [1.0; 4],
+            ));
             // right: x-mirror
-            out.push(gpu::QuadDraw::image_uv(left.id, px([x0 + rw, ty, EDGE, th]), [1.0, v0, TRIM, 1.0], [1.0; 4]));
+            out.push(gpu::QuadDraw::image_uv(
+                left.id,
+                px([x0 + rw, ty, EDGE, th]),
+                [1.0, v0, TRIM, 1.0],
+                [1.0; 4],
+            ));
             y += EDGE;
         }
     }
 
     /// Rasterises all text of the frame; re-uploads only when it changed.
-    fn text_canvas(&mut self, frame: &FrameState, k: f32, telop: Option<(f32, f32)>) -> Result<gpu::ImageId, RenderError> {
+    fn text_canvas(
+        &mut self,
+        frame: &FrameState,
+        k: f32,
+        telop: Option<(f32, f32)>,
+    ) -> Result<gpu::ImageId, RenderError> {
         let key = format!(
             "{:?}|{:?}|{:?}|{:?}|{}",
             frame.talk.as_ref().map(|t| {
                 let s = frame.window_shake;
-                (&t.name, &t.body, t.visible, (t.window_alpha * 255.0) as u8, (s[0] * 4.0) as i32, (s[1] * 4.0) as i32)
+                (
+                    &t.name,
+                    &t.body,
+                    t.visible,
+                    (t.window_alpha * 255.0) as u8,
+                    (s[0] * 4.0) as i32,
+                    (s[1] * 4.0) as i32,
+                )
             }),
-            frame.telop.as_ref().map(|b| (&b.text, telop.map(|(x, a)| ((x * 4.0) as i32, (a * 255.0) as u8)))),
-            frame.place_info.as_ref().map(|b| (&b.text, (b.x * 4.0) as i32)),
-            frame.full_screen_text.as_ref().map(|b| (&b.text, (b.progress * 64.0) as u32, (b.alpha * 255.0) as u8)),
-            frame.movie.as_ref().map_or("", |m| if m.file.is_some() { "" } else { m.name.as_str() })
+            frame.telop.as_ref().map(|b| (
+                &b.text,
+                telop.map(|(x, a)| ((x * 4.0) as i32, (a * 255.0) as u8))
+            )),
+            frame
+                .place_info
+                .as_ref()
+                .map(|b| (&b.text, (b.x * 4.0) as i32)),
+            frame.full_screen_text.as_ref().map(|b| (
+                &b.text,
+                (b.progress * 64.0) as u32,
+                (b.alpha * 255.0) as u8
+            )),
+            frame.movie.as_ref().map_or("", |m| if m.file.is_some() {
+                ""
+            } else {
+                m.name.as_str()
+            })
         );
         if self.text_key.as_deref() == Some(key.as_str()) {
             return Ok(self.gpu.text_image());
@@ -472,23 +602,44 @@ impl Renderer {
             underlay: None,
             char_spacing: 0.0,
         };
-        let banner = sse_text::Style { auto_size: false, ..body };
-        let frame_at = |x: f32, y: f32, bw: f32, bh: f32, align: f32, valign: f32| sse_text::Frame {
-            x: x * k,
-            y: y * k,
-            width: bw,
-            height: bh,
-            scale: k,
-            align,
-            valign,
+        let banner = sse_text::Style {
+            auto_size: false,
+            ..body
         };
-        let rect = |r: [f32; 4], align: f32, valign: f32| frame_at(r[0], r[1], r[2], r[3], align, valign);
+        let frame_at =
+            |x: f32, y: f32, bw: f32, bh: f32, align: f32, valign: f32| sse_text::Frame {
+                x: x * k,
+                y: y * k,
+                width: bw,
+                height: bh,
+                scale: k,
+                align,
+                valign,
+            };
+        let rect =
+            |r: [f32; 4], align: f32, valign: f32| frame_at(r[0], r[1], r[2], r[3], align, valign);
         if let Some(t) = &frame.talk {
             use native_ui::layout as l;
             let [wx, wy] = frame.window_shake;
             let shaken = |r: [f32; 4]| [r[0] + wx, r[1] - wy, r[2], r[3]];
-            sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, rect(shaken(l::NAME), 0.0, 0.0), &name, t.window_alpha);
-            sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, rect(shaken(l::WORDS), 0.0, 0.0), &body, t.window_alpha);
+            sse_text::draw(
+                &mut canvas,
+                &self.name_font,
+                &t.name,
+                u32::MAX,
+                rect(shaken(l::NAME), 0.0, 0.0),
+                &name,
+                t.window_alpha,
+            );
+            sse_text::draw(
+                &mut canvas,
+                &self.body_font,
+                &t.body,
+                t.visible,
+                rect(shaken(l::WORDS), 0.0, 0.0),
+                &body,
+                t.window_alpha,
+            );
             if self.native.has_window() {
                 // `AutoSignalText`: 32, white, centre / middle, characterSpacing −4, no outline
                 let auto = sse_text::Style {
@@ -499,18 +650,51 @@ impl Renderer {
                     char_spacing: l::AUTO_TEXT_SPACING,
                     ..name
                 };
-                let auto_w = self.name_font.preferred_width("AUTO", l::AUTO_TEXT_SIZE, l::AUTO_TEXT_SPACING);
-                sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect(shaken(l::auto_text(auto_w)), 0.5, 0.5), &auto, t.window_alpha);
+                let auto_w =
+                    self.name_font
+                        .preferred_width("AUTO", l::AUTO_TEXT_SIZE, l::AUTO_TEXT_SPACING);
+                sse_text::draw(
+                    &mut canvas,
+                    &self.name_font,
+                    "AUTO",
+                    u32::MAX,
+                    rect(shaken(l::auto_text(auto_w)), 0.5, 0.5),
+                    &auto,
+                    t.window_alpha,
+                );
             }
         }
-        let plain = sse_text::Style { auto_size: false, outline: None, ..body };
+        let plain = sse_text::Style {
+            auto_size: false,
+            outline: None,
+            ..body
+        };
         if let (Some(b), Some((x, a))) = (&frame.telop, telop) {
             let [l, t, w, h] = native_ui::layout::TELOP_TEXT;
-            sse_text::draw(&mut canvas, &self.body_font, &b.text, u32::MAX, rect([l + x, t, w, h], 0.5, 0.5), &plain, a);
+            sse_text::draw(
+                &mut canvas,
+                &self.body_font,
+                &b.text,
+                u32::MAX,
+                rect([l + x, t, w, h], 0.5, 0.5),
+                &plain,
+                a,
+            );
         }
         if let Some(p) = &frame.place_info {
             let [l, t, w, h] = native_ui::layout::PLACE_TEXT;
-            sse_text::draw(&mut canvas, &self.body_font, &p.text, u32::MAX, rect([l + p.x, t, w, h], 0.0, 0.5), &sse_text::Style { size: 40.0, ..plain }, 1.0);
+            sse_text::draw(
+                &mut canvas,
+                &self.body_font,
+                &p.text,
+                u32::MAX,
+                rect([l + p.x, t, w, h], 0.0, 0.5),
+                &sse_text::Style {
+                    size: 40.0,
+                    ..plain
+                },
+                1.0,
+            );
         }
         if let Some(b) = &frame.full_screen_text {
             // `ScenarioFullScreenTextDialog/Text` (`resources.assets|576995`): 56, left,
@@ -542,7 +726,15 @@ impl Renderer {
         }
         if let Some(m) = frame.movie.as_ref().filter(|m| m.file.is_none()) {
             let msg = format!("[movie: {}]", m.name);
-            sse_text::draw(&mut canvas, &self.body_font, &msg, u32::MAX, frame_at(0.0, 500.0, 1920.0, 80.0, 0.5, 0.5), &banner, 0.6);
+            sse_text::draw(
+                &mut canvas,
+                &self.body_font,
+                &msg,
+                u32::MAX,
+                frame_at(0.0, 500.0, 1920.0, 80.0, 0.5, 0.5),
+                &banner,
+                0.6,
+            );
         }
         self.gpu.upload_text(&canvas.to_rgba8());
         self.text_key = Some(key);
@@ -564,16 +756,36 @@ impl Renderer {
 
     /// Uses this `ffmpeg` for movie frames.
     pub fn set_ffmpeg(&mut self, ffmpeg: PathBuf) {
-        self.movie = movie::MovieDecoder::new(ffmpeg, self.cfg.width, self.cfg.height, movie_rect(&self.cfg), self.fps);
+        self.movie = movie::MovieDecoder::new(
+            ffmpeg,
+            self.cfg.width,
+            self.cfg.height,
+            movie_rect(&self.cfg),
+            self.fps,
+        );
     }
 
     /// Notes that depend on the supplied assets.
     pub fn asset_notes(&self) -> Vec<String> {
-        self.native
+        let mut notes: Vec<String> = self
+            .native
             .missing
             .iter()
             .map(|s| format!("UI sprite {s}.png not supplied; that element is not drawn"))
-            .collect()
+            .collect();
+        if self.fx.is_none() {
+            notes.push(format!(
+                "tex_common_tri_01.png or {} not supplied; the transition particles are not drawn",
+                fx::FxPrefab::FILE
+            ));
+        }
+        if self.side_edges.is_none() {
+            notes.push(
+                "tex_transition_top.png / tex_transition_left.png not supplied; side fades are not drawn"
+                    .into(),
+            );
+        }
+        notes
     }
 
     pub fn ui(&self) -> &UiAssets {

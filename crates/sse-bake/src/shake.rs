@@ -44,7 +44,13 @@ impl Shake {
         let n = ((vibrato as f32 * duration) as i32).max(2) as usize;
         let decay = strength / n as f32;
         let mut durations: Vec<f32> = (0..n)
-            .map(|i| if fade_out { (i + 1) as f32 / n as f32 * duration } else { duration / n as f32 })
+            .map(|i| {
+                if fade_out {
+                    (i + 1) as f32 / n as f32 * duration
+                } else {
+                    duration / n as f32
+                }
+            })
             .collect();
         let sum: f32 = durations.iter().sum();
         for d in &mut durations {
@@ -79,7 +85,12 @@ impl Shake {
                 tos.push([0.0, 0.0]);
             }
         }
-        Shake { start, fps, ends, tos }
+        Shake {
+            start,
+            fps,
+            ends,
+            tos,
+        }
     }
 
     /// The offset at `frame`; zero before the start and after the end.
@@ -93,11 +104,18 @@ impl Shake {
         };
         let seg_start = if i == 0 { 0.0 } else { self.ends[i - 1] };
         let seg = self.ends[i] - seg_start;
-        let mut p = if seg > 0.0 { (t - seg_start) / seg } else { 1.0 };
+        let mut p = if seg > 0.0 {
+            (t - seg_start) / seg
+        } else {
+            1.0
+        };
         p = -p * (p - 2.0); // OutQuad
         let from = if i == 0 { [0.0, 0.0] } else { self.tos[i - 1] };
         let to = self.tos[i];
-        [from[0] + (to[0] - from[0]) * p, from[1] + (to[1] - from[1]) * p]
+        [
+            from[0] + (to[0] - from[0]) * p,
+            from[1] + (to[1] - from[1]) * p,
+        ]
     }
 }
 

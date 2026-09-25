@@ -1,4 +1,4 @@
-//! # sse-params -- the parameter table (Pass 1 → Pass 2 seam, decision Q14)
+//! # sse-params -- the parameter table (Pass 1 → Pass 2 seam, ADR-0004)
 //!
 //! Plain data describing the complete visual and audio state of every frame. `sse-bake`
 //! writes it; `sse-render` and `sse-export` read it. Living in its own crate keeps the

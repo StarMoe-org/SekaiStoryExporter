@@ -1,117 +1,139 @@
 # SekaiStoryExporter
 
-**SekaiStoryExporter**（缩写 `sse`）：还原 Project Sekai 的 Live2D 剧情演出（AVG），并导出为视频。
+[![CI](https://github.com/StarMoe-org/SekaiStoryExporter/actions/workflows/ci.yml/badge.svg)](https://github.com/StarMoe-org/SekaiStoryExporter/actions/workflows/ci.yml)
+
+**SekaiStoryExporter**（缩写 `sse`）：还原 Project Sekai 的 Live2D 剧情演出，并导出为与游戏一致的自动播放视频。
+
+> English summary at the [end of this page](#english-summary).
 
 | | |
 |---|---|
 | 语言 | Rust |
-| 渲染 | wgpu（macOS / Metal，Windows / DX12） |
-| 平台 | macOS (Apple Silicon)、Windows (NVIDIA) |
-| 状态 / Status | **早期实现**：第一话可导出自动播放视频（近似项见导出报告） / early: episode 1 exports to video |
-| 许可 / Licence | AGPL-3.0-or-later + [Cubism Core 链接例外](LICENSE-EXCEPTION) |
+| 渲染 | wgpu（macOS / Metal，Windows / DX12，Linux / Vulkan） |
+| 平台 | macOS arm64、Windows x64、Linux x64 |
+| 许可 | AGPL-3.0-or-later + [Cubism Core 链接例外](LICENSE-EXCEPTION) |
 
 ## 支持矩阵
 
-| 项目版本 | 游戏 region | 游戏版本 | 状态 |
-|---|---|---|---|
-| 0.0.0 | cn | 6.4.0 (Unity 2022.3.62f3) | 逆向阶段：剧本层已还原，见 [`docs/reverse/versions/cn-6.4.0/`](docs/reverse/versions/cn-6.4.0/) |
-
-## 文档导航
-
-新人按顺序读前三份：
-
-| | 文档 | 内容 |
+| 区服 | 游戏版本 | 状态 |
 |---|---|---|
-| 1 | [`docs/decisions.md`](docs/decisions.md) | ⭐ 架构决策（Q1–Q39），**单一事实来源** |
-| 2 | [`docs/spec/glossary.md`](docs/spec/glossary.md) | 术语表，写代码前必读 |
-| 3 | [`docs/spec/coordinate-systems.md`](docs/spec/coordinate-systems.md) | 7 套坐标系 + 时间基规约，本项目最高频 bug 来源 |
-| | [`docs/architecture.md`](docs/architecture.md) | 数据流、仓库结构、crate 依赖约束、路线 |
-| | [`docs/conventions/determinism.md`](docs/conventions/determinism.md) | 确定性规约（D 级自动检查 / R 级人工评审） |
-| | [`docs/spec/tolerance.md`](docs/spec/tolerance.md) | 保真度容差规范（T1 跨平台 / T2 对游戏） |
-| | [`docs/testing.md`](docs/testing.md) | 五层测试策略 |
-| | [`docs/reverse/workflow.md`](docs/reverse/workflow.md) | 逆向工作流与 provenance 规约 |
-| | [`docs/reverse/work-order.md`](docs/reverse/work-order.md) | ⭐ 逆向工作单：需要从游戏中取得的内容 |
-| | [`docs/reverse/open-questions.md`](docs/reverse/open-questions.md) | 待确认事实清单 |
-| | [`docs/reverse/versions/cn-6.4.0/`](docs/reverse/versions/cn-6.4.0/) | ⭐ **逆向结论**：枚举、常量、坐标映射、状态机、特效语义 |
-| | [`docs/versioning.md`](docs/versioning.md) | 版本策略与游戏更新适配 checklist |
-| | [`docs/conventions/language.md`](docs/conventions/language.md) | 语言规约（代码与 commit 英文 / PR·Issue 中英皆可 / 设计文档中文） |
-| | [`docs/risks.md`](docs/risks.md) | 已知风险登记 |
-| | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 协作流程与 PR 清单 |
+| CN | 6.4.0 | ✅ 主线、活动、卡面、特别篇 |
+| JP | 6.8.1 | ✅ 主线、活动、卡面、特别篇 |
 
-## 环境
+两个区服共用同一套实现，只有字体等素材随客户端不同。
+导出旁会生成 `*.report.txt`，列出本次输出中的全部近似与未支持项（例如 3D MV）。
 
-| 依赖 | 用途 | 必需 |
-|---|---|---|
-| Rust | 主工具链，版本由 `rust-toolchain.toml` 钉死（当前 1.98.1） | ✅ |
-| Git LFS | 二进制 fixture，克隆后执行 `git lfs install` | ✅ |
-| ffmpeg | 视频编码与混音 | ✅ |
-| Live2D Cubism Core | Live2D 模型解析与变形（用户自行获取，见 ADR-0002） | ✅ |
-| .NET | 生成 L1 oracle fixture | 开发期 |
-| PlayCover + 游戏 | 采集 ground truth | 保真度工作 |
+## 快速上手
 
-## 使用（第一话导出）
+需要准备：[ffmpeg](https://ffmpeg.org/)、[uv](https://docs.astral.sh/uv/)，以及你自己合法持有的游戏客户端（`.ipa`）。
 
-```sh
-# 1. 用 SekaiStoryRipper 导出剧情资产（需自备解密密钥）
-ripper --out <ripper-out> rip unit:school-refusal-story-chapter/1
+**1. 安装 sse。** 从 [Releases](https://github.com/StarMoe-org/SekaiStoryExporter/releases) 下载对应平台的压缩包，
+或者从源码构建（不需要 Cubism SDK）：
 
-# 2. 准备（均由你自行获取，不随本仓库分发）
-#    - Live2D Cubism SDK for Native（接受其条款），设置 SSE_CUBISM_CORE_DIR=<sdk>/Core
-#    - --ui 目录：SourceHanSansSC-Medium.otf / -Bold.otf（思源黑体，SIL OFL）；
-#      从自己的客户端（ipa 的 data.unity3d）导出的 UI sprite，按 sprite 名存为 PNG：
-#      bg_story_adv / bg_base_half_r8_wh / bg_base_round_h48_wh / icon_triangle_h22_wh /
-#      btn_circle_h80_wh / icon_menu_story_wh（缺哪张就不画哪个元素，并写入报告）；
-#      没有 bg_story_adv 时退回 Dialogue_Background.png 叠层
-export SSE_CUBISM_CORE_DIR=/path/to/CubismSdkForNative/Core
-cargo build --release -p sse-cli
-
-# 3. 导出（需要 ffmpeg）
-./target/release/sse --library <ripper-out> export unit:school-refusal-story-chapter/1 \
-    -o out/ep1.mp4 --ui <ui-dir>
-# 单帧：sse ... render <selector> --frame 6500 -o f.png --ui <ui-dir>
-# 调试：sse ... inspect <selector>（IR）/ timeline <selector> / bake <selector>
+```bash
+cargo build --release -p sse-cli      # 产物在 target/release/sse
 ```
 
-导出旁会生成 `*.report.txt`，列出本次输出中所有近似与未支持项。
+**2. 准备 Live2D Cubism Core。** Core 是 Live2D 的闭源库，不随本项目分发。
+下载 [Cubism SDK for Native](https://www.live2d.com/sdk/download/native/) 并接受其条款，然后任选一种方式：
 
-## 资产
+```bash
+export SSE_CUBISM_CORE_DIR=/path/to/CubismSdkForNative/Core    # SDK 的 Core 目录
+# 或者：把 Core/dll/<平台>/ 下的动态库（libLive2DCubismCore.dylib / Live2DCubismCore.dll /
+#       libLive2DCubismCore.so）放到 sse 可执行文件旁边，或用 SSE_CUBISM_CORE 指向它
+```
 
-**本仓库不包含、也不分发任何游戏资产。**
+**3. 用 SekaiStoryRipper 下载剧情资源。** 见 [SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper) 的快速上手：
 
-Live2D 模型、动作、字体、语音、BGM、背景图等全部版权归 SEGA / Colorful Palette 所有。
-运行本工具需要你自行提供资产：用伴生工具 [SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper)
-从游戏 CDN 下载并解包（需自备解密密钥），sse 只读取它的输出目录（`library/` + `episodes/`）。
-sse 本身不含任何下载或解密代码。
+```bash
+ripper rip unit:school-refusal-story-chapter/1              # CN，结果在 out/
+ripper --region jp rip event:185/1                          # 日服，结果在 out/jp/
+```
 
-缺少资产时工具会明确报错并列出缺失清单，不会静默降级。
+**4. 从客户端导出 UI 套件。** 对话框贴图、字体和转场粒子随安装包分发，不在 CDN 上。
+用与剧情同一区服的客户端导出：
 
-## 法律边界
+```bash
+uv run tools/ui-kit/extract.py <your-client.ipa> ui-cn
+```
 
-本项目是资产查看与研究工具，代码开源，资产不分发。请勿使用本工具产出的内容进行商业用途或再分发。
+也可以传 `.app` 目录、其中的 `Data` 目录或 `data.unity3d`。脚本只在本地读取，不联网。
 
-Live2D Cubism SDK 的使用与分发受 Live2D 自身条款约束，本仓库不包含其二进制，需用户自行获取并同意其条款。许可证事项见 [ADR-0002](docs/adr/0002-license.md)（AGPL-3.0-or-later + Cubism Core 链接例外）。
+**5. 导出视频。**
 
+```bash
+sse --library out export unit:school-refusal-story-chapter/1 -o ep1.mp4 --ui ui-cn
+```
+
+## 更多用法
+
+```bash
+# 单帧 PNG
+sse --library out render unit:school-refusal-story-chapter/1 --frame 6500 -o f.png --ui ui-cn
+
+# 按 4K 渲染、1080p 编码（与 4K 设备上游戏的画面一致，包括随分辨率变化的模糊大小）
+sse --library out export <selector> -o ep.mp4 --ui ui-cn --width 3840 --height 2160 --output-size 1920x1080
+
+# 调试：IR / 时间轴 / 参数表
+sse --library out inspect <selector>
+sse --library out timeline <selector>
+sse --library out bake <selector> [--frame N]
+```
+
+其他选项：`--player-name`（替换 `{{playerName}}`，默认「世界」的居民）、`--from` / `--to`（只导出一段帧）、
+`--crf`、`--ffmpeg`、`--game cn|jp`（默认按 Ripper 输出里记录的区服）。`--library` 与 `--ui` 也可以用环境变量
+`SSE_LIBRARY` / `SSE_UI_DIR` 指定。
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/adr/`](docs/adr/) | 架构决策记录 |
+| [`docs/architecture.md`](docs/architecture.md) | 数据流、仓库结构、crate 依赖约束 |
+| [`docs/spec/glossary.md`](docs/spec/glossary.md) | 术语表 |
+| [`docs/spec/coordinate-systems.md`](docs/spec/coordinate-systems.md) | 坐标系与时间基，最高频 bug 来源 |
+| [`docs/spec/ir.md`](docs/spec/ir.md) / [`param-table.md`](docs/spec/param-table.md) | IR 与参数表格式 |
+| [`docs/spec/tolerance.md`](docs/spec/tolerance.md) | 保真度容差（T1 跨平台 / T2 对游戏） |
+| [`docs/conventions/determinism.md`](docs/conventions/determinism.md) | 确定性规约 |
+| [`docs/testing.md`](docs/testing.md) | 测试策略 |
+| [`docs/versioning.md`](docs/versioning.md) | 版本策略与游戏更新适配 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 协作流程与 PR 清单 |
+
+设计文档以中文为主；代码与 commit 为英文；PR 与 Issue 中英文皆可（[语言规约](docs/conventions/language.md)）。
+
+## 资产与法律边界
+
+- **本仓库和发布包不包含、也不分发任何游戏资产。** Live2D 模型、动作、字体、语音、BGM、背景、UI 贴图等的版权归
+  SEGA / Colorful Palette / Craft Egg 所有。CDN 资源由 SekaiStoryRipper 下载，UI 套件由你从自己的客户端导出；
+  sse 本身不含任何下载或解密代码。
+- **Live2D Cubism Core 不随本项目分发**，需你自行取得并同意其条款；sse 在运行时加载它。
+- 缺少资产时工具会明确报错或在导出报告中列出，不会静默降级。
+- 本项目与 SEGA、Colorful Palette、Craft Egg 及 Live2D Inc. 没有任何关联，仅供个人研究使用。
+  请勿将产出内容用于商业用途或再分发，并自行遵守游戏服务条款与所在地法律。
+- 许可证事项见 [ADR-0002](docs/adr/0002-license.md)。依 AGPL 第 13 条，若将本工具作为网络服务提供，须向其用户提供对应源码。
 
 ---
 
 ## English summary
 
-**SekaiStoryExporter** (`sse`) is a tool that reproduces Project Sekai's Live2D story scenes (visual-novel style) and
-exports them to video. Written in Rust, rendering through wgpu (Metal on macOS,
-DX12 on Windows).
+**SekaiStoryExporter** (`sse`) reproduces Project Sekai's Live2D story scenes and exports them
+to auto-play videos that match the game. Written in Rust, rendering through wgpu (Metal, DX12,
+Vulkan). CN 6.4.0 and JP 6.8.1 are supported at the same level.
 
-**This repository ships no game assets.** Live2D models, motions, fonts, voice lines,
-BGM and backgrounds all remain the property of SEGA / Colorful Palette. You must
-supply them yourself with the companion tool
-[SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper), which downloads and
-unpacks them (you provide the decryption key); sse only reads its output and contains
-no download or decryption code. The tool fails loudly with a list of missing assets rather
-than degrading silently.
+Quick start:
 
-The Live2D Cubism SDK is **not** bundled. You must obtain it from Live2D Inc. and
-accept their terms. The project is AGPL-3.0-or-later with an additional permission
-allowing linking against Cubism Core -- see [`LICENSE-EXCEPTION`](LICENSE-EXCEPTION)
+1. Build (`cargo build --release -p sse-cli`) or download a release. No Cubism SDK is needed to build.
+2. Download the Live2D Cubism SDK for Native yourself and point `SSE_CUBISM_CORE_DIR` at its
+   `Core` directory (or put the Core shared library next to `sse`). Core is loaded at run time.
+3. Rip an episode with [SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper).
+4. Export the UI kit from a game client you own: `uv run tools/ui-kit/extract.py <client.ipa> ui`.
+5. `sse --library out export <selector> -o ep.mp4 --ui ui`.
+
+**This repository ships no game assets and no Live2D Cubism Core.** Every asset remains the
+property of SEGA / Colorful Palette / Craft Egg; you supply them yourself. Not affiliated with
+SEGA, Colorful Palette, Craft Egg or Live2D Inc. Licensed under AGPL-3.0-or-later with an
+additional permission for linking with Cubism Core — see [`LICENSE-EXCEPTION`](LICENSE-EXCEPTION)
 and [ADR-0002](docs/adr/0002-license.md).
 
-Design documents live under `docs/` and are written in Chinese; code and commit
-messages are in English. **Pull requests and issues are welcome in either language.** See [`docs/conventions/language.md`](docs/conventions/language.md).
+Design documents live under `docs/` and are written in Chinese; code and commit messages are in
+English. **Pull requests and issues are welcome in either language.**

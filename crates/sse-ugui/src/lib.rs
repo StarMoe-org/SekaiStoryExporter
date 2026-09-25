@@ -1,6 +1,6 @@
 //! # sse-ugui -- Unity UGUI layout evaluator
 //!
-//! Decision Q9 committed to the full resolution range, and this crate is where that cost lands.
+//! ADR-0010 commits to the full resolution range, and this crate is where that cost lands.
 //! **Everything here is deterministic mathematics with no unknowns.**
 //!
 //! ## Responsibilities

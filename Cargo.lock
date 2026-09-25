@@ -96,12 +96,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "arraydeque"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
-
-[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -254,12 +248,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
-name = "core_detect"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
-
-[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -303,21 +291,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "encoding_rs"
-version = "0.8.41"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5ef0006ac9ab233c38522f5ae99cae3625151de8f706cacee1cba4b8e2832a"
-dependencies = [
- "cfg-if",
- "core_detect",
- "multiversion",
- "multiversion_no_op",
- "rustversion",
- "scopeguard",
- "simdutf8",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -342,12 +315,6 @@ dependencies = [
  "miniz_oxide 0.9.1",
  "zlib-rs",
 ]
-
-[[package]]
-name = "foldhash"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "foldhash"
@@ -439,22 +406,13 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.15.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
-dependencies = [
- "foldhash 0.1.5",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
  "allocator-api2",
  "equivalent",
- "foldhash 0.2.0",
+ "foldhash",
 ]
 
 [[package]]
@@ -463,16 +421,7 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
- "foldhash 0.2.0",
-]
-
-[[package]]
-name = "hashlink"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
-dependencies = [
- "hashbrown 0.15.5",
+ "foldhash",
 ]
 
 [[package]]
@@ -656,33 +605,6 @@ dependencies = [
  "num-traits",
  "pxfm",
 ]
-
-[[package]]
-name = "multiversion"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ca4bea16ffc3f443cf7d866912118196bfef4c6a1556ca00f9f9b00bb43f7c"
-dependencies = [
- "multiversion-macros",
-]
-
-[[package]]
-name = "multiversion-macros"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d416831a7317ef4b08bee00b69cbbb9c8763da7959a7026244d6266869f9c83"
-dependencies = [
- "proc-macro2",
- "quote",
- "rustversion",
- "syn 3.0.6",
-]
-
-[[package]]
-name = "multiversion_no_op"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "naga"
@@ -1003,8 +925,8 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "ripper-format"
-version = "0.1.0"
-source = "git+https://github.com/StarMoe-org/SekaiStoryRipper.git?tag=v0.1.0#faa0f8921d81821be065ff77eb1db198182695be"
+version = "0.2.0"
+source = "git+https://github.com/StarMoe-org/SekaiStoryRipper.git?tag=v0.2.0#f647b3fe95ae6347c725dc10fb5f75d44773cded"
 dependencies = [
  "serde",
 ]
@@ -1077,12 +999,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
-name = "simdutf8"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
-
-[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1114,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "sse-assets"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "hound",
  "image",
@@ -1127,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "sse-bake"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "sse-assets",
  "sse-core",
@@ -1140,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "sse-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1159,15 +1075,14 @@ dependencies = [
 
 [[package]]
 name = "sse-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "libm",
- "yaml-rust2",
 ]
 
 [[package]]
 name = "sse-export"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "hound",
  "image",
@@ -1180,14 +1095,14 @@ dependencies = [
 
 [[package]]
 name = "sse-fidelity"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "sse-core",
 ]
 
 [[package]]
 name = "sse-ir"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1196,9 +1111,10 @@ dependencies = [
 
 [[package]]
 name = "sse-live2d"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "libloading",
  "serde",
  "serde_json",
  "sse-assets",
@@ -1208,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "sse-params"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "sse-core",
@@ -1216,12 +1132,13 @@ dependencies = [
 
 [[package]]
 name = "sse-render"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "crc32fast",
  "image",
  "pollster",
+ "serde",
  "serde_json",
  "sse-assets",
  "sse-core",
@@ -1234,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "sse-scenario"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1246,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "sse-text"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "sse-core",
@@ -1255,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "sse-timeline"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "sse-assets",
@@ -1266,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "sse-ugui"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "sse-assets",
  "sse-core",
@@ -1751,18 +1668,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
-
-[[package]]
-name = "yaml-rust2"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2462ea039c445496d8793d052e13787f2b90e750b833afee748e601c17621ed9"
-dependencies = [
- "arraydeque",
- "encoding_rs",
- "hashlink",
-]
+version = "0.1.0"
 
 [[package]]
 name = "zerocopy"

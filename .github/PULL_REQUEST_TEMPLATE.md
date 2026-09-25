@@ -7,7 +7,7 @@
 ## 关联 / Links
 
 - 决策 / ADR:
-- open-questions 条目 / entry:
+- Issue:
 
 ## 检查清单 / Checklist
 
@@ -18,26 +18,18 @@
 - [ ] 坐标量使用带空间标记的类型，未手写 Y 轴翻转 /
       coordinate values use space-tagged types; no hand-written Y-flips
 
-> CI 未启用，以上均为本地执行 / CI is not enabled; run these locally.
+> CI 会在 macOS、Windows、Linux 上运行以上检查 / CI runs these on macOS, Windows and Linux.
 
 ### 若触碰渲染路径 / If you touched the render path
 
 `sse-render` · `sse-bake` · `sse-live2d` · `sse-ugui` · `sse-text` · `sse-core`
 
-- [ ] 附本地 **T1 帧哈希报告** / attach a local **T1 frame-hash report**
+- [ ] 附改动前后同一批帧的比对 / attach a before/after comparison of the same frames
 - [ ] 符合确定性 R 级规则 / complies with the R-level rules in
       `docs/conventions/determinism.md`
 - [ ] 输出像素有变化则已记入 `CHANGELOG.md` / pixel changes recorded in `CHANGELOG.md`
 
-### 若新增逆向结论 / If you added reverse-engineered findings
-
-- [ ] 进的是 `constants.yaml`，未硬编码 / goes into `constants.yaml`, not hard-coded Rust
-- [ ] provenance 填齐（source / method / confidence） / provenance complete
-- [ ] `open-questions.md` 已打勾 / matching entry ticked
-- [ ] 未提交原始 dump / 游戏源码 / 资产 / no raw dumps, game source, or assets
-
 ### 若变更架构决策 / If you changed an architecture decision
 
-- [ ] 新增 ADR / added an ADR under `docs/adr/`
-- [ ] `docs/decisions.md` 已**追加**修订条目（未原地覆盖） /
-      **appended** a revision entry (never overwrite in place)
+- [ ] 新增 ADR，并把被取代的 ADR 标为 superseded /
+      added an ADR under `docs/adr/` and marked the replaced one as superseded

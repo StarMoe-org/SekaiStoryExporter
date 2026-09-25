@@ -23,6 +23,13 @@ fn main() {
             hi = [hi[0].max(p[0]), hi[1].max(p[1])];
         }
     }
-    println!("bounds {lo:?} {hi:?}; masked {}", model.drawables.iter().filter(|d| !d.masks.is_empty()).count());
+    println!(
+        "bounds {lo:?} {hi:?}; masked {}",
+        model
+            .drawables
+            .iter()
+            .filter(|d| !d.masks.is_empty())
+            .count()
+    );
     println!("{:?}", &model.parameter_ids[..12]);
 }

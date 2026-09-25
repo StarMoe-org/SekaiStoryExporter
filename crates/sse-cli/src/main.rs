@@ -2,7 +2,7 @@
 //!
 //! ## Responsibilities
 //! - Subcommand orchestration: inspect / timeline / export
-//! - The shell around the export configuration (decision Q15: output form is a struct;
+//! - The shell around the export configuration (ADR-0004: output form is a struct;
 //!   the CLI is only a thin layer over it)
 
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ struct Cli {
     /// SekaiStoryRipper output directory (holding `library/` and `episodes/`).
     #[arg(long, global = true, env = "SSE_LIBRARY", default_value = ".")]
     library: PathBuf,
-    /// Replacement for {{playerName}} (decision Q39).
+    /// Replacement for {{playerName}} (ADR-0008).
     #[arg(long, global = true, default_value = "「世界」的居民")]
     player_name: String,
     #[command(subcommand)]
@@ -69,7 +69,7 @@ enum Command {
         #[arg(long, default_value = "ffmpeg")]
         ffmpeg: PathBuf,
         /// Encode at this size, e.g. 1920x1080, after rendering at --width/--height (e.g. render
-        /// 3840x2160 to match a 4K device capture such as PlayCover's).
+        /// 3840x2160 to match a 4K device capture).
         #[arg(long, value_parser = parse_size)]
         output_size: Option<(u32, u32)>,
         #[command(flatten)]
@@ -83,7 +83,7 @@ struct OutputArgs {
     width: u32,
     #[arg(long, default_value_t = 1080)]
     height: u32,
-    /// Directory with the user-supplied UI overlays and fonts (see README).
+    /// The UI kit exported from your own client by `tools/ui-kit/extract.py` (see README).
     #[arg(long, env = "SSE_UI_DIR")]
     ui: PathBuf,
     /// Which client's fonts to use: cn or jp. Default: the `region` the library was ripped from
@@ -104,17 +104,20 @@ fn library_region(library: &std::path::Path) -> String {
 
 impl OutputArgs {
     /// Both clients' talk windows use `FOT-RodinNTLGPro-DB SDF_Base` for the words and `-EB` for
-    /// the name, with the same FaceInfo and layout (docs/reverse/versions/jp-6.8.1/text.md). Only
-    /// the source font behind them differs: CN renamed Source Han Sans SC Medium/Bold, JP the real
-    /// FOT-RodinNTLG Pro DB/EB.
+    /// the name, with the same FaceInfo and layout. Only the source font behind them differs: CN
+    /// ships Source Han Sans SC Medium/Bold under the Rodin names, JP the real FOT-RodinNTLG Pro
+    /// DB/EB. `tools/ui-kit/extract.py` exports whichever the client has; a CN kit without them
+    /// falls back to Source Han Sans SC files.
     fn ui_assets(&self, library: &std::path::Path) -> sse_render::UiAssets {
         let opt = |name: &str| {
             let p = self.ui.join(name);
             p.is_file().then_some(p)
         };
         let game = self.game.clone().unwrap_or_else(|| library_region(library));
+        let rodin = ("FOT-RodinNTLGPro-DB.otf", "FOT-RodinNTLGPro-EB.otf");
         let (body, name) = match game.as_str() {
-            "jp" => ("FOT-RodinNTLGPro-DB.otf", "FOT-RodinNTLGPro-EB.otf"),
+            "jp" => rodin,
+            _ if opt(rodin.0).is_some() => rodin,
             _ => ("SourceHanSansSC-Medium.otf", "SourceHanSansSC-Bold.otf"),
         };
         sse_render::UiAssets {
@@ -135,7 +138,10 @@ impl OutputArgs {
 
 fn parse_size(text: &str) -> Result<(u32, u32), String> {
     let (w, h) = text.split_once('x').ok_or("expected WIDTHxHEIGHT")?;
-    Ok((w.parse().map_err(|_| "bad width")?, h.parse().map_err(|_| "bad height")?))
+    Ok((
+        w.parse().map_err(|_| "bad width")?,
+        h.parse().map_err(|_| "bad height")?,
+    ))
 }
 
 fn main() -> Result<()> {
@@ -158,20 +164,35 @@ fn main() -> Result<()> {
             let tl = sse_timeline::compile(&lib, &ep, tb)?;
             println!("{}", serde_json::to_string_pretty(&tl)?);
         }
-        Command::Render { selector, frame, output, out } => {
+        Command::Render {
+            selector,
+            frame,
+            output,
+            out,
+        } => {
             let table = bake(&lib, selector, &opts, out.config())?;
-            let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&cli.library))?;
-            let f = table
-                .frames
-                .get(*frame as usize)
-                .with_context(|| format!("frame {frame} out of range (0..{})", table.frames.len()))?;
+            let mut r =
+                sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&cli.library))?;
+            let f = table.frames.get(*frame as usize).with_context(|| {
+                format!("frame {frame} out of range (0..{})", table.frames.len())
+            })?;
             let rgba = r.render(f)?;
             sse_export::write_png(output, out.width, out.height, rgba)?;
             println!("wrote {}", output.display());
         }
-        Command::Export { selector, output, from, to, crf, ffmpeg, output_size, out } => {
+        Command::Export {
+            selector,
+            output,
+            from,
+            to,
+            crf,
+            ffmpeg,
+            output_size,
+            out,
+        } => {
             let table = bake(&lib, selector, &opts, out.config())?;
-            let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&cli.library))?;
+            let mut r =
+                sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&cli.library))?;
             r.set_ffmpeg(ffmpeg.clone());
             let n = table.frames.len() as u32;
             let range = from.unwrap_or(0).min(n)..to.unwrap_or(n).min(n);
@@ -202,7 +223,10 @@ fn main() -> Result<()> {
                 &lib,
                 selector,
                 &opts,
-                sse_render::RenderConfig { width: 1920, height: 1080 },
+                sse_render::RenderConfig {
+                    width: 1920,
+                    height: 1080,
+                },
             )?;
             match frame {
                 Some(f) => println!("{}", serde_json::to_string_pretty(&table.frames[*f])?),
@@ -243,7 +267,11 @@ fn bake(
     )?)
 }
 
-fn load(lib: &Library, selector: &str, opts: &sse_scenario::ParseOptions) -> Result<sse_ir::Episode> {
+fn load(
+    lib: &Library,
+    selector: &str,
+    opts: &sse_scenario::ParseOptions,
+) -> Result<sse_ir::Episode> {
     let path = lib
         .episode_path(selector)
         .with_context(|| format!("bad selector {selector}"))?;

@@ -7,9 +7,9 @@
 //! - `det_math`: transcendental functions that are bit-identical across platforms
 //!   (backed by the `libm` crate, never `std` -- see `docs/conventions/determinism.md` D-4)
 //! - Deterministic helpers such as `fs::read_dir_sorted`
-//! - Time-base types: `SimFrame`, `FrameNo`, `Seconds`, `TimeBase` (see decisions Q33 / Q34)
+//! - Time-base types: `SimFrame`, `FrameNo`, `Seconds`, `TimeBase` (see ADR-0009)
 //! - A seeded PRNG for the few places where the game uses `UnityEngine.Random`
-//! - `consts`: reverse-engineered constants (`docs/reverse/versions/cn-6.4.0/constants.yaml`)
+//! - `consts`: the game's constants (CN 6.4.0 / JP 6.8.1)
 //!
 //! ## Not responsible for
 //! - Anything specific to PJSK beyond the constant table

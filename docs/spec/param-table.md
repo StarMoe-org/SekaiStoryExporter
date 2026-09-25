@@ -5,7 +5,7 @@
 > v1 → v2：`full_screen_text` 改为 `FullScreenTextState`
 > （`progress` 逐槽进度 + `alpha` 淡出），新增 `cinemascope`（FST 黑边/底板的缓动比例）、`menu_alpha`、
 > `TalkState.auto_time`（AUTO 三角闪烁相位）；`movie` 改为 `MovieState`（视频文件 + 已播放秒数）。 类型定义在 `crates/sse-params`，本文件说明语义。
-> 参数表是 Pass 1（`sse-bake`）与 Pass 2（`sse-render` / `sse-export`）的接缝（Q14）。
+> 参数表是 Pass 1（`sse-bake`）与 Pass 2（`sse-render` / `sse-export`）的接缝（ADR-0004）。
 
 ## 结构
 
@@ -26,5 +26,4 @@
 ## 尚未实现
 
 - delta + zstd 编码与磁盘持久化（当前只在内存中）
-- 与游戏 hook dump（RT-02）的比对协议：字段对应、容差、缺失字段处理
 - 随机访问索引（并行 Pass 2 / 预览器 seek）

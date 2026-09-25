@@ -1,0 +1,35 @@
+# Build, lint and test on every supported platform (ADR-0014). The same jobs run on GitHub
+# Actions from .github/workflows/ci.yml with GitHub-hosted runners.
+# Runners must be registered with the labels used in `runs-on` below.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-arm64, windows-x64, linux-x64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --release --locked -p sse-cli
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sse-${{ matrix.runner }}
+          path: |
+            target/release/sse
+            target/release/sse.exe
+          if-no-files-found: error

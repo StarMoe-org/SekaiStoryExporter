@@ -2,7 +2,7 @@
 //!
 //! `CubismPhysicsController` evaluates once per `LateUpdate` with `Time.deltaTime`: no fixed
 //! physics FPS and no output interpolation (both were added in SDK 4.2 / 5). Algorithm and
-//! constants follow the Cubism Framework semantics (decision Q1: reimplemented in Rust).
+//! constants follow the Cubism Framework semantics (ADR-0003: reimplemented in Rust).
 //! The rotation of `totalTranslation` deliberately reuses the already-rotated X, exactly as
 //! the SDK does.
 
@@ -340,7 +340,9 @@ impl Physics {
                     Kind::Y => translation.y,
                     Kind::Angle => {
                         let parent = if i >= 2 {
-                            rig.particles[i - 1].position.sub(rig.particles[i - 2].position)
+                            rig.particles[i - 1]
+                                .position
+                                .sub(rig.particles[i - 2].position)
                         } else {
                             self.gravity.scale(-1.0)
                         };

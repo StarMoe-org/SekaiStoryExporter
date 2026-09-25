@@ -36,15 +36,22 @@ impl Drop for Stream {
 
 impl MovieDecoder {
     pub fn new(ffmpeg: PathBuf, width: u32, height: u32, rect: (u32, u32), fps: u32) -> Self {
-        Self { ffmpeg, width, height, rect, fps, stream: None }
+        Self {
+            ffmpeg,
+            width,
+            height,
+            rect,
+            fps,
+            stream: None,
+        }
     }
 
     /// RGBA8 of frame `index` (at the output rate) of `file`; after the end, the last frame.
     pub fn frame(&mut self, file: &Path, index: u32) -> Result<&[u8], String> {
-        let reuse = self
-            .stream
-            .as_ref()
-            .is_some_and(|s| s.file == file && (s.index == index || s.index + 1 == index || (s.ended && index > s.index)));
+        let reuse = self.stream.as_ref().is_some_and(|s| {
+            s.file == file
+                && (s.index == index || s.index + 1 == index || (s.ended && index > s.index))
+        });
         if !reuse {
             self.stream = Some(self.open(file, index)?);
         }

@@ -60,13 +60,11 @@
 | **Timeline** | 绝对时间轴。IR 经编译后每个事件带确定的帧号区间 |
 | **ParamTable** | 参数表。Pass 1 烘焙出的逐帧完整状态快照，见 `spec/param-table.md` |
 | **Bake** | Pass 1：顺序空跑时间轴、只更新状态、输出参数表 |
-| **Ground truth** | 真值。来自 PlayCover 运行的游戏本体 |
-| **Oracle** | 测试参照物。用 .NET 跑反编译出的 C# 产生期望值 |
-| **Dumper** | 注入游戏进程提取数据的工具（UI 层次 / 参数 / atlas / 原始帧） |
-| **Fixture** | 固化的测试数据（dumper 或 oracle 的产出） |
+| **Ground truth** | 真值。同一剧情在游戏里的画面 |
+| **UI 套件** | `--ui` 目录：用 `tools/ui-kit/extract.py` 从用户自己的客户端导出的 sprite、贴图、字体和转场粒子参数 |
+| **Fixture** | 固化的测试数据（只含哈希、计数等结构化期望值） |
 | **T1** | 跨平台一致性容差（macOS 渲染器 vs Windows 渲染器） |
-| **T2** | 对游戏保真度容差（macOS 渲染器 vs ground truth） |
-| **Provenance** | 逆向结论的来源记录，见 `reverse/workflow.md` |
+| **T2** | 对游戏保真度容差（渲染器 vs ground truth） |
 | **差异形态** | diff 的分类：边缘带 / 区块 / 孤点 / 全局偏移。比差异幅度更重要 |
 
 ## 易混淆词对照
@@ -77,4 +75,4 @@
 | 缩放 | `scaleFactor`（CanvasScaler）/ SSAA 倍率 / 模型 scale | 同上 |
 | 时间 | 帧号 / 秒 / 采样 | 权威是帧号 |
 | 动作 | 身体动作 / 表情 | Motion vs Facial |
-| 一致 | 逐位一致 / 容差内一致 | 本项目已放弃逐位一致（Q6=D） |
+| 一致 | 逐位一致 / 容差内一致 | 本项目已放弃逐位一致（ADR-0005） |

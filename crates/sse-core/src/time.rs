@@ -1,4 +1,4 @@
-//! Time base (decisions Q33 / Q34, `docs/spec/coordinate-systems.md`).
+//! Time base (ADR-0009, `docs/spec/coordinate-systems.md`).
 //!
 //! The simulation frame is the authoritative time unit. Seconds are derived from frames,
 //! never the other way round. Accumulation follows Unity: `elapsed += Time.deltaTime` in f32.
@@ -11,7 +11,7 @@ pub struct SimFrame(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct FrameNo(pub u32);
 
-/// Fixed-step time base. The story runs at `consts::STORY_TARGET_FRAME_RATE` (decision Q34).
+/// Fixed-step time base. The story runs at `consts::STORY_TARGET_FRAME_RATE` (ADR-0009).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TimeBase {
     fps: u32,

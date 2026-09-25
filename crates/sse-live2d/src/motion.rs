@@ -1,4 +1,4 @@
-//! Motion playback with the game's semantics (decision Q24, `live2d.md` §1 / §3).
+//! Motion playback with the game's semantics (ADR-0007).
 //!
 //! `CP.PlayableAnimator` owns two layers (`Live2DModel.MotionLayer { Body = 0, Face = 1 }`).
 //! Each layer is an `AnimationMixerPlayable` whose inputs are crossfaded by `PlayableBlender`
@@ -38,7 +38,11 @@ impl BoundClip {
             .curves
             .iter()
             .filter(|c| c.binding.attr_hash == ATTR_VALUE)
-            .filter_map(|c| hashes.get(&c.binding.path_hash).map(|&i| (i, c.data.clone())))
+            .filter_map(|c| {
+                hashes
+                    .get(&c.binding.path_hash)
+                    .map(|&i| (i, c.data.clone()))
+            })
             .collect();
         Self {
             name: motion.name.clone(),

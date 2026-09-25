@@ -39,11 +39,12 @@ pub fn mix(lib: &Library, table: &ParamTable, frames: u32) -> Result<Vec<f32>, E
     let mut out = vec![0.0_f32; total * 2];
     let at = |frame: u32| (f64::from(frame) / fps * f64::from(MIX_RATE)) as usize;
     for cue in &table.audio {
-        let gain = cue.volume * match cue.kind {
-            AudioKind::Bgm => 0.6,
-            AudioKind::Se => 0.8,
-            AudioKind::Voice | AudioKind::Movie => 1.0,
-        };
+        let gain = cue.volume
+            * match cue.kind {
+                AudioKind::Bgm => 0.6,
+                AudioKind::Se => 0.8,
+                AudioKind::Voice | AudioKind::Movie => 1.0,
+            };
         for file in &cue.files {
             let pcm = lib.load_wav(file)?;
             let ch = usize::from(pcm.channels.max(1));
@@ -65,7 +66,13 @@ pub fn mix(lib: &Library, table: &ParamTable, frames: u32) -> Result<Vec<f32>, E
                 }
                 let pos = (local as f64 * ratio) % src_frames as f64;
                 let i0 = pos as usize;
-                let i1 = if i0 + 1 < src_frames { i0 + 1 } else if cue.looping { 0 } else { i0 };
+                let i1 = if i0 + 1 < src_frames {
+                    i0 + 1
+                } else if cue.looping {
+                    0
+                } else {
+                    i0
+                };
                 let t = (pos - i0 as f64) as f32;
                 let mut g = gain;
                 if cue.fade_in > 0 && local < fade_in {
@@ -105,7 +112,8 @@ pub fn write_wav(path: &Path, samples: &[f32]) -> Result<(), ExportError> {
 }
 
 pub fn write_png(path: &Path, width: u32, height: u32, rgba: Vec<u8>) -> Result<(), ExportError> {
-    let img = image::RgbaImage::from_raw(width, height, rgba).ok_or_else(|| io("bad frame size"))?;
+    let img =
+        image::RgbaImage::from_raw(width, height, rgba).ok_or_else(|| io("bad frame size"))?;
     img.save(path).map_err(io)
 }
 
@@ -134,12 +142,21 @@ pub fn export_video(
 ) -> Result<(), ExportError> {
     let frames = opts.range.end - opts.range.start;
     let full = mix(lib, table, opts.range.end)?;
-    let skip = (f64::from(opts.range.start) / f64::from(table.fps) * f64::from(MIX_RATE)) as usize * 2;
+    let skip =
+        (f64::from(opts.range.start) / f64::from(table.fps) * f64::from(MIX_RATE)) as usize * 2;
     let wav = opts.output.with_extension("mix.wav");
     write_wav(&wav, &full[skip.min(full.len())..])?;
 
     let mut child = Command::new(&opts.ffmpeg)
-        .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba"])
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+        ])
         .args(["-s", &format!("{}x{}", opts.width, opts.height)])
         .args(["-r", &table.fps.to_string(), "-i", "-"])
         .arg("-i")
@@ -148,20 +165,42 @@ pub fn export_video(
             Some((w, h)) => vec!["-vf".to_owned(), format!("scale={w}:{h}:flags=lanczos")],
             None => Vec::new(),
         })
-        .args(["-c:v", "libx264", "-preset", "medium", "-crf", &opts.crf.to_string()])
-        .args(["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest"])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            &opts.crf.to_string(),
+        ])
+        .args([
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+        ])
         .arg(&opts.output)
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|e| ExportError::Ffmpeg(e.to_string()))?;
-    let mut stdin = child.stdin.take().ok_or_else(|| ExportError::Ffmpeg("no stdin".into()))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ExportError::Ffmpeg("no stdin".into()))?;
     for (n, f) in opts.range.clone().enumerate() {
         let rgba = renderer.render(&table.frames[f as usize])?;
-        stdin.write_all(&rgba).map_err(|e| ExportError::Ffmpeg(e.to_string()))?;
+        stdin
+            .write_all(&rgba)
+            .map_err(|e| ExportError::Ffmpeg(e.to_string()))?;
         progress(n as u32 + 1, frames);
     }
     drop(stdin);
-    let status = child.wait().map_err(|e| ExportError::Ffmpeg(e.to_string()))?;
+    let status = child
+        .wait()
+        .map_err(|e| ExportError::Ffmpeg(e.to_string()))?;
     let _ = std::fs::remove_file(&wav);
     if !status.success() {
         return Err(ExportError::Ffmpeg(format!("exited with {status}")));

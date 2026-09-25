@@ -1,4 +1,4 @@
-//! Lip sync (decision Q27, `live2d.md` §8).
+//! Lip sync (ADR-0007).
 
 use sse_assets::Library;
 use sse_core::{TimeBase, consts, det_math};
@@ -13,9 +13,10 @@ pub struct MonoPcm {
 }
 
 pub fn load_mono(lib: &Library, a: &AudioRef) -> Result<MonoPcm, BakeError> {
-    let file = a.files.first().ok_or_else(|| {
-        BakeError::Live2d(a.cue.clone(), "voice cue has no waveform".into())
-    })?;
+    let file = a
+        .files
+        .first()
+        .ok_or_else(|| BakeError::Live2d(a.cue.clone(), "voice cue has no waveform".into()))?;
     let pcm = lib.load_wav(&file.0)?;
     let ch = usize::from(pcm.channels.max(1));
     let samples = pcm
@@ -45,14 +46,20 @@ pub enum Lip {
 }
 
 impl Lip {
-    /// `SetLipSyncK` (`live2d.md` §8).
+    /// `SetLipSyncK`.
     pub fn voice(pcm: MonoPcm, start: u32, character: CharacterId, talk_tvs: f32) -> Self {
         let (tvs, pow_k) = if talk_tvs > 0.0 {
             (talk_tvs, talk_tvs * consts::LIPSYNC_DEFAULT_POW_K)
         } else if consts::LIPSYNC_LOUD_CHARACTERS.contains(&character) {
-            (consts::LIPSYNC_LOUD_TARGET_VALUE_SCALE, consts::LIPSYNC_DEFAULT_POW_K)
+            (
+                consts::LIPSYNC_LOUD_TARGET_VALUE_SCALE,
+                consts::LIPSYNC_DEFAULT_POW_K,
+            )
         } else {
-            (consts::LIPSYNC_DEFAULT_TARGET_VALUE_SCALE, consts::LIPSYNC_DEFAULT_POW_K)
+            (
+                consts::LIPSYNC_DEFAULT_TARGET_VALUE_SCALE,
+                consts::LIPSYNC_DEFAULT_POW_K,
+            )
         };
         Lip::Voice {
             pcm,
@@ -102,8 +109,12 @@ impl Lip {
                 };
                 let a = rms * *tvs;
                 let mut target = a * det_math::powf(a + 1.0, *pow_k);
-                target = if target < 0.06 { 0.0 } else { target.clamp(0.2, 1.0) };
-                // `Live2DVoice.UpdateParam` (0x205DD20): the weights depend on the *current*
+                target = if target < 0.06 {
+                    0.0
+                } else {
+                    target.clamp(0.2, 1.0)
+                };
+                // `Live2DVoice.UpdateParam`: the weights depend on the *current*
                 // value (== prev, both are written with the result), not on the target
                 let (kt, kp) = if *prev < 0.1 {
                     (0.6, 0.4)

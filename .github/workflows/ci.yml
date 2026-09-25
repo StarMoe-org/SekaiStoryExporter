@@ -1,55 +1,46 @@
-name: CI
+# Build, lint and test on every supported platform (ADR-0014). No game assets and no Cubism
+# SDK are needed: Cubism Core is loaded at run time (ADR-0003). The same jobs run on Gitea
+# Actions from .gitea/workflows/ci.yml with self-hosted runner labels.
+name: ci
 
-# ⚠️ CI 暂未启用（决策：2026-09-22）。仅保留配置，只能手动触发。
-#    启用时把下面的 push / pull_request 触发器取消注释。
-# ⚠️ CI is not enabled yet. Kept as configuration, manual dispatch only.
-#    Uncomment the push / pull_request triggers to enable.
 on:
-  workflow_dispatch:
-  # push: { branches: [main] }
-  # pull_request:
+  push:
+    branches: [main]
+  pull_request:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
 
 jobs:
-  # L0/L1：不需要游戏资产、不需要 GPU
   check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
-    runs-on: ${{ matrix.os }}
+        os: [macos-14, windows-latest, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable   # 实际版本由 rust-toolchain.toml 决定
-          components: rustfmt, clippy
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --release --locked -p sse-cli
 
-  docs-consistency:
-    runs-on: ubuntu-latest
+  docs-links:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      # 文档间交叉引用的完整性检查（避免规约引用了不存在的文件）
-      - name: 检查文档内部链接
+      - name: Check relative links between docs
         run: |
           fail=0
           while IFS= read -r line; do
             f="${line%%:*}"; rest="${line#*:}"
             for ref in $(printf '%s' "$rest" | grep -oE '\(([A-Za-z0-9_./-]+\.md)\)' | tr -d '()'); do
               base="$(dirname "$f")"
-              [ -f "$base/$ref" ] || [ -f "$ref" ] || { echo "断链: $f -> $ref"; fail=1; }
+              [ -f "$base/$ref" ] || [ -f "$ref" ] || { echo "broken link: $f -> $ref"; fail=1; }
             done
           done < <(grep -rn '](.*\.md)' --include='*.md' . || true)
           exit $fail
-
-# ⚠️ 缺失的一层：T1（macOS vs Windows 帧哈希比对）
-# GitHub 托管 runner 没有 NVIDIA 独显，无法在此进行真实 GPU 比对。
-# 见 docs/testing.md「关键约束」。在自建 runner 就绪前，
-# 动渲染路径的 PR 需附本地 T1 报告（见 CONTRIBUTING.md）。

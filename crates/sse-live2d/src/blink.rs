@@ -1,4 +1,4 @@
-//! `Sekai.Live2D.Live2DEyeBlinkController` (`live2d.md` §8).
+//! `Sekai.Live2D.Live2DEyeBlinkController`.
 //!
 //! After `BuildModelComponent` the controller is put to sleep, and every body-motion change
 //! calls `Sleep()` again, so in stories blinking is driven by clip events

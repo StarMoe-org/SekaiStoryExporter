@@ -45,7 +45,10 @@ pub(crate) fn load(dir: &Path) -> Result<Model3> {
     let build = dir.join("buildmodeldata.json");
     if build.is_file() {
         let b: BuildModelData = crate::read_json(&build)?;
-        let moc = b.moc3_file_name.strip_suffix(".bytes").unwrap_or(&b.moc3_file_name);
+        let moc = b
+            .moc3_file_name
+            .strip_suffix(".bytes")
+            .unwrap_or(&b.moc3_file_name);
         return Ok(Model3 {
             dir: dir.to_owned(),
             moc: dir.join(moc),
@@ -69,7 +72,12 @@ pub(crate) fn load(dir: &Path) -> Result<Model3> {
     Ok(Model3 {
         dir: dir.to_owned(),
         moc: join(&raw.file_references.moc),
-        textures: raw.file_references.textures.iter().map(|t| join(t)).collect(),
+        textures: raw
+            .file_references
+            .textures
+            .iter()
+            .map(|t| join(t))
+            .collect(),
         physics: raw.file_references.physics.as_deref().map(join),
     })
 }

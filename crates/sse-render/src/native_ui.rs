@@ -1,9 +1,8 @@
 //! The scenario UI rebuilt from the game's prefabs (`TalkWindow` `resources.assets|7281`,
-//! `ScreenLayerScenario` `|6451`, `ScenarioFullScreenTextDialog` `|44706`); geometry and
-//! colours in `docs/reverse/notes/2026-09-24-native-capture-visual.md`.
+//! `ScreenLayerScenario` `|6451`, `ScenarioFullScreenTextDialog` `|44706`).
 //!
 //! The sprites come from the game client (`data.unity3d`, not the CDN bundles), so the user
-//! supplies them in the `--ui` directory under their sprite names. A missing sprite drops
+//! exports them with `tools/ui-kit/extract.py` into the `--ui` directory. A missing sprite drops
 //! that element and is reported.
 
 use std::path::Path;
@@ -72,12 +71,29 @@ pub mod layout {
 /// `ac_scenario_telop_v2_01` / `_02` (`resources.assets|1974` / `|1975`), decoded from the
 /// clips' streamed curves (`story/scripts/45_clipdecode.py`) and sampled every 1/60 s.
 pub mod telop_clip {
-    pub const SHOW_BASE_SCALE_X: [f32; 21] = [0.0, 0.12296, 0.25391, 0.37795, 0.48991, 0.58842, 0.67495, 0.74949, 0.8125, 0.86549, 0.90873, 0.94274, 0.9685, 0.98631, 0.99662, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-    pub const SHOW_BASE_ALPHA: [f32; 21] = [0.0, 0.01372, 0.05516, 0.1241, 0.21668, 0.32518, 0.4419, 0.55721, 0.66336, 0.75705, 0.83532, 0.89725, 0.94396, 0.97589, 0.99411, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-    pub const SHOW_TEXT_ALPHA: [f32; 21] = [0.0, 0.0, 0.0, 0.0, 0.01159, 0.05211, 0.1365, 0.29176, 0.54934, 0.80819, 0.90005, 0.92208, 0.94093, 0.95669, 0.96952, 0.97981, 0.98771, 0.99342, 0.99723, 0.99935, 1.0];
-    pub const SHOW_TEXT_X: [f32; 21] = [-30.0, -30.0, -30.0, -30.0, -29.69962, -28.85422, -27.52697, -25.79509, -23.74549, -21.42683, -18.92424, -16.32728, -13.678, -11.0655, -8.57801, -6.25891, -4.19729, -2.47611, -1.14798, -0.29804, 0.0];
+    pub const SHOW_BASE_SCALE_X: [f32; 21] = [
+        0.0, 0.12296, 0.25391, 0.37795, 0.48991, 0.58842, 0.67495, 0.74949, 0.8125, 0.86549,
+        0.90873, 0.94274, 0.9685, 0.98631, 0.99662, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+    ];
+    pub const SHOW_BASE_ALPHA: [f32; 21] = [
+        0.0, 0.01372, 0.05516, 0.1241, 0.21668, 0.32518, 0.4419, 0.55721, 0.66336, 0.75705,
+        0.83532, 0.89725, 0.94396, 0.97589, 0.99411, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+    ];
+    pub const SHOW_TEXT_ALPHA: [f32; 21] = [
+        0.0, 0.0, 0.0, 0.0, 0.01159, 0.05211, 0.1365, 0.29176, 0.54934, 0.80819, 0.90005, 0.92208,
+        0.94093, 0.95669, 0.96952, 0.97981, 0.98771, 0.99342, 0.99723, 0.99935, 1.0,
+    ];
+    pub const SHOW_TEXT_X: [f32; 21] = [
+        -30.0, -30.0, -30.0, -30.0, -29.69962, -28.85422, -27.52697, -25.79509, -23.74549,
+        -21.42683, -18.92424, -16.32728, -13.678, -11.0655, -8.57801, -6.25891, -4.19729, -2.47611,
+        -1.14798, -0.29804, 0.0,
+    ];
     /// Base and text alpha share this curve.
-    pub const HIDE_ALPHA: [f32; 21] = [1.0, 0.99797, 0.99153, 0.97992, 0.96224, 0.93757, 0.90421, 0.86046, 0.8045, 0.73316, 0.6446, 0.53982, 0.42369, 0.30985, 0.21207, 0.1352, 0.07928, 0.04113, 0.01686, 0.00391, 0.00001];
+    pub const HIDE_ALPHA: [f32; 21] = [
+        1.0, 0.99797, 0.99153, 0.97992, 0.96224, 0.93757, 0.90421, 0.86046, 0.8045, 0.73316,
+        0.6446, 0.53982, 0.42369, 0.30985, 0.21207, 0.1352, 0.07928, 0.04113, 0.01686, 0.00391,
+        0.00001,
+    ];
 
     pub fn sample(table: &[f32; 21], t: f32) -> f32 {
         let x = (t * 60.0).clamp(0.0, 20.0);
@@ -113,7 +129,8 @@ impl NativeUi {
     pub fn load(gpu: &mut gpu::Gpu, dir: &Path) -> Self {
         let mut missing = Vec::new();
         let window = load(dir, "bg_story_adv", &mut missing).map(|i| gpu.image(&i));
-        let name_bar = load(dir, "bg_base_half_r8_wh", &mut missing).map(|i| gpu.image(&name_bar(&i)));
+        let name_bar =
+            load(dir, "bg_base_half_r8_wh", &mut missing).map(|i| gpu.image(&name_bar(&i)));
         let auto_bg = load(dir, "bg_base_round_h48_wh", &mut missing)
             .map(|i| gpu.image(&slice_h(&i, 25, 25, layout::AUTO[2] as u32)));
         let auto_icon = load(dir, "icon_triangle_h22_wh", &mut missing)
@@ -127,7 +144,16 @@ impl NativeUi {
             })
         };
         let ramp = [gpu.image(&ramp(true)), gpu.image(&ramp(false))];
-        Self { window, name_bar, auto_bg, auto_icon, menu, menu_icon, ramp, missing }
+        Self {
+            window,
+            name_bar,
+            auto_bg,
+            auto_icon,
+            menu,
+            menu_icon,
+            ramp,
+            missing,
+        }
     }
 
     pub fn has_window(&self) -> bool {
@@ -136,40 +162,79 @@ impl NativeUi {
 
     /// Talk window background, name bar and auto signal. `auto_time` is the seconds since
     /// the auto signal was enabled (drives the icon blink).
-    pub fn talk(&self, out: &mut Vec<QuadDraw>, k: f32, alpha: f32, auto_time: f32, auto_text_w: f32) {
+    pub fn talk(
+        &self,
+        out: &mut Vec<QuadDraw>,
+        k: f32,
+        alpha: f32,
+        auto_time: f32,
+        auto_text_w: f32,
+    ) {
         let r = |a: [f32; 4]| [a[0] * k, a[1] * k, a[2] * k, a[3] * k];
         let with = |c: [f32; 4], a: f32| [c[0], c[1], c[2], c[3] * a];
         if let Some(w) = &self.window {
-            out.push(QuadDraw::image(w.id, r(layout::WINDOW), with(layout::WINDOW_COLOR, alpha)));
+            out.push(QuadDraw::image(
+                w.id,
+                r(layout::WINDOW),
+                with(layout::WINDOW_COLOR, alpha),
+            ));
         }
         if let Some(b) = &self.name_bar {
-            out.push(QuadDraw::image(b.id, r(layout::NAME_BAR), [1.0, 1.0, 1.0, alpha]));
+            out.push(QuadDraw::image(
+                b.id,
+                r(layout::NAME_BAR),
+                [1.0, 1.0, 1.0, alpha],
+            ));
         }
         if let Some(b) = &self.auto_bg {
-            out.push(QuadDraw::image(b.id, r(layout::AUTO), with(layout::AUTO_BG_COLOR, alpha)));
+            out.push(QuadDraw::image(
+                b.id,
+                r(layout::AUTO),
+                with(layout::AUTO_BG_COLOR, alpha),
+            ));
         }
         if let Some(i) = &self.auto_icon
             && auto_time.rem_euclid(1.0) < layout::AUTO_ICON_ON
         {
-            out.push(QuadDraw::image(i.id, r(layout::auto_icon(auto_text_w)), [1.0, 1.0, 1.0, alpha]));
+            out.push(QuadDraw::image(
+                i.id,
+                r(layout::auto_icon(auto_text_w)),
+                [1.0, 1.0, 1.0, alpha],
+            ));
         }
     }
 
     pub fn menu(&self, out: &mut Vec<QuadDraw>, k: f32, alpha: f32) {
         let r = |a: [f32; 4]| [a[0] * k, a[1] * k, a[2] * k, a[3] * k];
         if let Some(m) = &self.menu {
-            out.push(QuadDraw::image(m.id, r(layout::MENU), [1.0, 1.0, 1.0, alpha]));
+            out.push(QuadDraw::image(
+                m.id,
+                r(layout::MENU),
+                [1.0, 1.0, 1.0, alpha],
+            ));
         }
         if let Some(i) = &self.menu_icon {
             let c = layout::MENU_ICON_COLOR;
-            out.push(QuadDraw::image(i.id, r(layout::MENU_ICON), [c[0], c[1], c[2], c[3] * alpha]));
+            out.push(QuadDraw::image(
+                i.id,
+                r(layout::MENU_ICON),
+                [c[0], c[1], c[2], c[3] * alpha],
+            ));
         }
     }
 }
 
 /// Three-piece band of `bg_base_wh` (a plain white image) in `color`: a left ramp
 /// (`GradientAlpha` left 0 → right 1), a solid middle and a right ramp.
-fn band(ramps: &[gpu::Image; 2], out: &mut Vec<QuadDraw>, k: f32, x: [f32; 4], y: f32, h: f32, color: [f32; 4]) {
+fn band(
+    ramps: &[gpu::Image; 2],
+    out: &mut Vec<QuadDraw>,
+    k: f32,
+    x: [f32; 4],
+    y: f32,
+    h: f32,
+    color: [f32; 4],
+) {
     let r = |x0: f32, x1: f32| [x0 * k, y * k, (x1 - x0) * k, h * k];
     out.push(QuadDraw::image(ramps[0].id, r(x[0], x[1]), color));
     out.push(QuadDraw::solid(r(x[1], x[2]), color));
@@ -179,7 +244,13 @@ fn band(ramps: &[gpu::Image; 2], out: &mut Vec<QuadDraw>, k: f32, x: [f32; 4], y
 impl NativeUi {
     /// `ScenarioTelop` (`resources.assets|44707`): 1040×120 centred; `Content/Base` pieces
     /// 260 / 520 / 260 scaled in x about pivot x = 0.02. Returns the text's (x offset, alpha).
-    pub fn telop(&self, out: &mut Vec<QuadDraw>, k: f32, show: f32, hide: Option<f32>) -> (f32, f32) {
+    pub fn telop(
+        &self,
+        out: &mut Vec<QuadDraw>,
+        k: f32,
+        show: f32,
+        hide: Option<f32>,
+    ) -> (f32, f32) {
         use telop_clip::*;
         let (scale, base_a, text_a, text_x) = match hide {
             Some(t) => (1.0, sample(&HIDE_ALPHA, t), sample(&HIDE_ALPHA, t), 0.0),
@@ -195,7 +266,15 @@ impl NativeUi {
         let sx = |x: f32| pivot + (x - pivot) * scale;
         let c = layout::BAND_COLOR;
         if scale > 0.0 && base_a > 0.0 {
-            band(&self.ramp, out, k, [sx(440.0), sx(700.0), sx(1220.0), sx(1480.0)], 480.0, 120.0, [c[0], c[1], c[2], c[3] * base_a]);
+            band(
+                &self.ramp,
+                out,
+                k,
+                [sx(440.0), sx(700.0), sx(1220.0), sx(1480.0)],
+                480.0,
+                120.0,
+                [c[0], c[1], c[2], c[3] * base_a],
+            );
         }
         (text_x, text_a)
     }
@@ -203,7 +282,15 @@ impl NativeUi {
     /// `PlaceInfo` (`ScreenLayerScenario/UILayer/TopLeft2`): 580×64 at (x, 31); `Bg (3)` ramp
     /// 152 left of it, `Bg (4)` ramp 152 right of it.
     pub fn place_info(&self, out: &mut Vec<QuadDraw>, k: f32, x: f32) {
-        band(&self.ramp, out, k, [x - 152.0, x, x + 580.0, x + 732.0], 31.0, 64.0, layout::BAND_COLOR);
+        band(
+            &self.ramp,
+            out,
+            k,
+            [x - 152.0, x, x + 580.0, x + 732.0],
+            31.0,
+            64.0,
+            layout::BAND_COLOR,
+        );
     }
 }
 
@@ -212,10 +299,16 @@ pub fn cinemascope(out: &mut Vec<QuadDraw>, k: f32, w: f32, h: f32, e: f32) {
     if e <= 0.0 {
         return;
     }
-    out.push(QuadDraw::solid([0.0, 0.0, w, h], [0.0, 0.0, 0.0, sse_core::consts::FST_BASE_ALPHA * e]));
+    out.push(QuadDraw::solid(
+        [0.0, 0.0, w, h],
+        [0.0, 0.0, 0.0, sse_core::consts::FST_BASE_ALPHA * e],
+    ));
     let bar = sse_core::consts::FST_CINEMASCOPE_HEIGHT * e * k;
     out.push(QuadDraw::solid([0.0, 0.0, w, bar], [0.0, 0.0, 0.0, 1.0]));
-    out.push(QuadDraw::solid([0.0, h - bar, w, bar], [0.0, 0.0, 0.0, 1.0]));
+    out.push(QuadDraw::solid(
+        [0.0, h - bar, w, bar],
+        [0.0, 0.0, 0.0, 1.0],
+    ));
 }
 
 /// Nine-slice along x only (Unity `Image.Type.Sliced` with top/bottom borders of 0).
@@ -230,7 +323,9 @@ fn slice_h(src: &RgbaImage, left: u32, right: u32, out_w: u32) -> RgbaImage {
         } else if x >= out_w - right {
             sw - (out_w - x)
         } else {
-            left + (((x - left) as f32 + 0.5) / centre_dst * centre_src - 0.5).round().clamp(0.0, centre_src - 1.0) as u32
+            left + (((x - left) as f32 + 0.5) / centre_dst * centre_src - 0.5)
+                .round()
+                .clamp(0.0, centre_src - 1.0) as u32
         };
         for y in 0..sh {
             out.put_pixel(x, y, *src.get_pixel(sx, y));
@@ -254,7 +349,9 @@ fn name_bar(src: &RgbaImage) -> RgbaImage {
             d
         } else {
             let span = (sh - top).max(1) as f32;
-            top + (((d - top) as f32 + 0.5) / (len - top) as f32 * span - 0.5).round().clamp(0.0, span - 1.0) as u32
+            top + (((d - top) as f32 + 0.5) / (len - top) as f32 * span - 0.5)
+                .round()
+                .clamp(0.0, span - 1.0) as u32
         };
         let grad = layout::NAME_BAR_ALPHA * (1.0 - (d as f32 + 0.5) / len as f32);
         for row in 0..thick {

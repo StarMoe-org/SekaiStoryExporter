@@ -1,11 +1,11 @@
 //! # sse-ir -- intermediate representation
 //!
 //! The first seam of the project: the contract between the parsing layer and the
-//! compilation layer. Format spec: `docs/spec/ir.md` (decisions Q32–Q39).
+//! compilation layer. Format spec: `docs/spec/ir.md` (ADR-0008).
 //!
 //! ## Responsibilities
 //! - IR data structures, JSON debug serialisation, and the version field
-//! - Representation of unsupported content that still takes part in scheduling (Q35)
+//! - Representation of unsupported content that still takes part in scheduling (ADR-0008)
 //!
 //! ## Not responsible for
 //! - Parsing `ScenarioSceneData` (that is `sse-scenario`)
@@ -41,7 +41,7 @@ pub struct Episode {
 pub struct EpisodeSource {
     pub selector: String,
     pub title: String,
-    /// masterdata `scenarioId` (decision Q29), never the JSON's own `ScenarioId`.
+    /// masterdata `scenarioId` (ADR-0007), never the JSON's own `ScenarioId`.
     pub scenario_id: String,
 }
 
@@ -96,7 +96,7 @@ pub struct Block {
 #[serde(tag = "node", rename_all = "snake_case")]
 pub enum Node {
     Instr(Instr),
-    /// Only `Action = 5` produces a branch (Q36); its semantics are not reversed yet.
+    /// Only `Action = 5` produces a branch (ADR-0008); its semantics are not implemented yet.
     Branch(Branch),
 }
 
@@ -168,7 +168,7 @@ pub enum MotionChangeFactor {
 pub struct Talk {
     pub speakers: Vec<CharacterId>,
     pub display_name: String,
-    /// Final text: `{{playerName}}` already replaced (Q39); rich-text tags kept.
+    /// Final text: `{{playerName}}` already replaced (ADR-0008); rich-text tags kept.
     pub body: String,
     pub lip_sync: LipSyncMode,
     pub motion_change: MotionChangeFactor,
@@ -272,7 +272,7 @@ pub struct Layout {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum LayoutOp {
-    /// Only `SideTo` is used (open question #30).
+    /// Only `SideTo` is used; the game ignores `SideFrom` when moving.
     Move {
         to: Side,
         offset_x: f32,
@@ -287,7 +287,7 @@ pub enum LayoutOp {
         depth: DepthType,
     },
     /// `HideCharacter(id, delay)`: the 0.1 s fade starts after `delay` seconds
-    /// (`SnippetActionCharacterLayout` 0x16DB6F4). In place (`SideFrom == SideTo`) the delay is
+    /// (`SnippetActionCharacterLayout`). In place (`SideFrom == SideTo`) the delay is
     /// 0.15 s; otherwise it is the move duration minus 0.1 s.
     Hide {
         delay: f32,
@@ -475,7 +475,9 @@ pub enum UnsupportedReason {
 pub enum FinishRule {
     Immediate,
     /// Wait this many seconds after the delay (best available approximation).
-    After { seconds: f32 },
+    After {
+        seconds: f32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -523,7 +525,7 @@ pub enum Diagnostic {
 
 impl Episode {
     /// All instructions in document order, descending into the first arm of branches
-    /// (the default flattening, Q36).
+    /// (the default flattening, ADR-0008).
     pub fn instrs(&self) -> Vec<&Instr> {
         fn walk<'a>(b: &'a Block, out: &mut Vec<&'a Instr>) {
             for n in &b.nodes {

@@ -37,7 +37,7 @@ pub type Result<T> = std::result::Result<T, ScenarioError>;
 
 #[derive(Debug, Clone)]
 pub struct ParseOptions {
-    /// Replacement for `{{playerName}}` (decision Q39).
+    /// Replacement for `{{playerName}}` (ADR-0008).
     pub player_name: String,
 }
 
@@ -195,7 +195,10 @@ impl Parser<'_> {
             .map(|f| LibPath(f.path.clone()))
     }
 
-    fn audio(map: &BTreeMap<String, sse_assets::episode::AudioRef>, name: &str) -> Option<AudioRef> {
+    fn audio(
+        map: &BTreeMap<String, sse_assets::episode::AudioRef>,
+        name: &str,
+    ) -> Option<AudioRef> {
         map.get(name).map(|a| AudioRef {
             cue: a.cue.clone(),
             files: a.files.iter().cloned().map(LibPath).collect(),
@@ -242,7 +245,7 @@ impl Parser<'_> {
             5 => {
                 self.diags.push(Diagnostic::ApproximateTiming {
                     index: pos,
-                    reason: "Action=5 (Selectable) semantics not reversed (open question #42)".into(),
+                    reason: "Action=5 (Selectable) semantics are not implemented".into(),
                 });
                 let instr = Instr {
                     index: pos,
@@ -270,9 +273,7 @@ impl Parser<'_> {
             }
             7 => {
                 let d = &scene.sound_data[get(scene.sound_data.len(), "SoundData")?];
-                InstrKind::Sound {
-                    ops: self.sound(d),
-                }
+                InstrKind::Sound { ops: self.sound(d) }
             }
             8 => {
                 let m = &scene.scenario_snippet_character_layout_modes[get(
@@ -302,7 +303,11 @@ impl Parser<'_> {
         for (field, value) in [
             ("Speed", t.speed != 0.0, t.speed.to_string()),
             ("FontSize", t.font_size != 0, t.font_size.to_string()),
-            ("TalkTention", t.talk_tention != 0, t.talk_tention.to_string()),
+            (
+                "TalkTention",
+                t.talk_tention != 0,
+                t.talk_tention.to_string(),
+            ),
         ]
         .map(|(f, bad, v)| (f, (bad, v)))
         {

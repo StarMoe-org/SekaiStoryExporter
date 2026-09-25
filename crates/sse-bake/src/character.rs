@@ -90,9 +90,8 @@ impl CharacterRt {
         y: f32,
         scale: f32,
     ) -> Self {
-        // breathVector = 0 in stories: a constant written every frame (`live2d.md` §8).
-        let breath_value =
-            det_math::sinf(breath_deg * std::f32::consts::PI / 180.0) * 0.5 + 0.5;
+        // breathVector = 0 in stories: a constant written every frame.
+        let breath_value = det_math::sinf(breath_deg * std::f32::consts::PI / 180.0) * 0.5 + 0.5;
         Self {
             id,
             costume,
@@ -130,19 +129,23 @@ impl CharacterRt {
         Ok(bound)
     }
 
-    /// `ScenarioModel.ChangeMotionCore` / facial change (`live2d.md` §3).
+    /// `ScenarioModel.ChangeMotionCore` / facial change.
     pub fn play(&mut self, clip: Arc<BoundClip>, face: bool, first: bool) {
         let layer = if face { LAYER_FACE } else { LAYER_BODY };
         let blend = if first && self.animator.current(layer).is_none() {
             0.0
         } else if face {
-            self.fades.get(&clip.name).copied().unwrap_or(consts::FACIAL_FADE)
+            self.fades
+                .get(&clip.name)
+                .copied()
+                .unwrap_or(consts::FACIAL_FADE)
         } else {
-            // `ScenarioModel.ChangeMotionCore` (0x2063470): 0.125 s when either side is a link
+            // `ScenarioModel.ChangeMotionCore`: 0.125 s when either side is a link
             // motion or both share a category; otherwise the clip's blend-in time (default 0.5)
             let cur = self.animator.current(layer).unwrap_or("");
-            let same_category =
-                is_link_motion(cur) || is_link_motion(&clip.name) || category(cur) == category(&clip.name);
+            let same_category = is_link_motion(cur)
+                || is_link_motion(&clip.name)
+                || category(cur) == category(&clip.name);
             if same_category {
                 consts::SAME_CATEGORY_BLEND
             } else {
@@ -184,14 +187,14 @@ impl CharacterRt {
     }
 }
 
-/// `ScenarioModel.GetCategoryName` (0x2063AF4): `Regex.Match(name, "^" + CATEGORY_NAME_RULE)`
+/// `ScenarioModel.GetCategoryName`: `Regex.Match(name, "^" + CATEGORY_NAME_RULE)`
 /// with `CATEGORY_NAME_RULE = "[a-z]{1}[-]{1}[a-zA-Z0-9]+[-]{1}[a-zA-Z0-9]+"`; empty when it does
 /// not match. For ordinary motions (`w-kanade-tilthead02`) the category is the whole name.
 fn category(name: &str) -> &str {
     match_rule(name).map_or("", |n| &name[..n])
 }
 
-/// `ScenarioModel.IsLinkMotion` (0x2062864): `^RULE_to_RULE$`.
+/// `ScenarioModel.IsLinkMotion`: `^RULE_to_RULE$`.
 fn is_link_motion(name: &str) -> bool {
     match_rule(name)
         .and_then(|n| name[n..].strip_prefix("_to_"))
@@ -205,7 +208,12 @@ fn match_rule(s: &str) -> Option<usize> {
     if b.len() < 5 || !b[0].is_ascii_lowercase() || b[1] != b'-' {
         return None;
     }
-    let word = |from: usize| from + b[from..].iter().take_while(|c| c.is_ascii_alphanumeric()).count();
+    let word = |from: usize| {
+        from + b[from..]
+            .iter()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .count()
+    };
     let e1 = word(2);
     if e1 == 2 || e1 >= b.len() || b[e1] != b'-' {
         return None;

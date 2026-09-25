@@ -74,7 +74,13 @@ struct Material {
 
 #[derive(Debug, Clone)]
 enum Xf {
-    Rect { anchor_min: [f32; 2], anchor_max: [f32; 2], anchored: [f32; 2], size_delta: [f32; 2], pivot: [f32; 2] },
+    Rect {
+        anchor_min: [f32; 2],
+        anchor_max: [f32; 2],
+        anchored: [f32; 2],
+        size_delta: [f32; 2],
+        pivot: [f32; 2],
+    },
     Plain,
 }
 
@@ -150,8 +156,10 @@ pub enum EffectError {
 }
 
 fn load_json(path: &Path) -> Result<Value, EffectError> {
-    let s = std::fs::read(path).map_err(|e| EffectError::Load(path.display().to_string(), e.to_string()))?;
-    serde_json::from_slice(&s).map_err(|e| EffectError::Load(path.display().to_string(), e.to_string()))
+    let s = std::fs::read(path)
+        .map_err(|e| EffectError::Load(path.display().to_string(), e.to_string()))?;
+    serde_json::from_slice(&s)
+        .map_err(|e| EffectError::Load(path.display().to_string(), e.to_string()))
 }
 
 /// Blend of a particle material: the built-in legacy particle shaders by file id
@@ -178,9 +186,17 @@ impl Prefab {
         let objs = load_json(&dir.join("_objects.json"))?;
         let by: BTreeMap<i64, &Value> = objs
             .as_object()
-            .map(|o| o.iter().filter_map(|(k, v)| Some((k.parse::<i64>().ok()?, v))).collect())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, v)| Some((k.parse::<i64>().ok()?, v)))
+                    .collect()
+            })
             .unwrap_or_default();
-        let class = |id: i64| by.get(&id).and_then(|o| o["classId"].as_i64()).unwrap_or(-1);
+        let class = |id: i64| {
+            by.get(&id)
+                .and_then(|o| o["classId"].as_i64())
+                .unwrap_or(-1)
+        };
         let tree = |id: i64| by.get(&id).map(|o| &o["tree"]);
         // textures: pathId → png in this bundle
         let ripper = load_json(&dir.join("_ripper.json"))?;
@@ -197,7 +213,12 @@ impl Prefab {
         // path ids are unique, so look through the sibling effect bundles
         let foreign = sibling_pngs(lib, bundle);
         let tex_ref = |tex_id: i64| -> Option<TexRef> {
-            pngs.get(&tex_id).or_else(|| foreign.get(&tex_id)).map(|p| TexRef { png: p.clone(), uv: [0.0, 0.0, 1.0, 1.0] })
+            pngs.get(&tex_id)
+                .or_else(|| foreign.get(&tex_id))
+                .map(|p| TexRef {
+                    png: p.clone(),
+                    uv: [0.0, 0.0, 1.0, 1.0],
+                })
         };
         let sprite = |sid: i64| -> Option<Sprite> {
             let s = tree(sid)?;
@@ -209,20 +230,34 @@ impl Prefab {
             let (x, y, w, h) = (f(&r["x"]), f(&r["y"]), f(&r["width"]), f(&r["height"]));
             let mut tex = tex_ref(tex_id)?;
             tex.uv = [x / tw, 1.0 - (y + h) / th, (x + w) / tw, 1.0 - y / th];
-            Some(Sprite { tex, size: [w, h], ppu: f(&s["m_PixelsToUnits"]).max(1e-3), pivot: v2(&s["m_Pivot"]) })
+            Some(Sprite {
+                tex,
+                size: [w, h],
+                ppu: f(&s["m_PixelsToUnits"]).max(1e-3),
+                pivot: v2(&s["m_Pivot"]),
+            })
         };
         let material = |mid: i64| -> Option<Material> {
             let m = tree(mid)?;
-            let tex = m["m_SavedProperties"]["m_TexEnvs"].as_array().and_then(|envs| {
-                envs.iter()
-                    .find(|e| e["key"] == "_MainTex")
-                    .and_then(|e| tex_ref(pid(&e["value"]["m_Texture"])))
-            });
-            Some(Material { tex, blend: blend_of(m, &shader_names) })
+            let tex = m["m_SavedProperties"]["m_TexEnvs"]
+                .as_array()
+                .and_then(|envs| {
+                    envs.iter()
+                        .find(|e| e["key"] == "_MainTex")
+                        .and_then(|e| tex_ref(pid(&e["value"]["m_Texture"])))
+                });
+            Some(Material {
+                tex,
+                blend: blend_of(m, &shader_names),
+            })
         };
 
         // transforms, depth first from the root
-        let tfs: Vec<i64> = by.keys().copied().filter(|&id| matches!(class(id), 4 | 224)).collect();
+        let tfs: Vec<i64> = by
+            .keys()
+            .copied()
+            .filter(|&id| matches!(class(id), 4 | 224))
+            .collect();
         let root_tf = tfs
             .iter()
             .copied()
@@ -253,7 +288,8 @@ impl Prefab {
                 name: go["m_Name"].as_str().unwrap_or("").to_owned(),
                 parent,
                 children: Vec::new(),
-                active: go["m_IsActive"].as_bool().unwrap_or(true) || go["m_IsActive"].as_i64() == Some(1),
+                active: go["m_IsActive"].as_bool().unwrap_or(true)
+                    || go["m_IsActive"].as_i64() == Some(1),
                 xf,
                 pos: v3(&t["m_LocalPosition"]),
                 rot: [f(&q["x"]), f(&q["y"]), f(&q["z"]), f(&q["w"])],
@@ -263,7 +299,12 @@ impl Prefab {
                 canvas_order: None,
                 system: None,
             };
-            let comps: Vec<i64> = go["m_Component"].as_array().into_iter().flatten().map(|c| pid(&c["component"])).collect();
+            let comps: Vec<i64> = go["m_Component"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| pid(&c["component"]))
+                .collect();
             let mut ps = None;
             let mut psr = None;
             for c in comps {
@@ -272,8 +313,11 @@ impl Prefab {
                     198 => ps = Some(ct),
                     199 => psr = Some(ct),
                     223 => {
-                        if ct["m_OverrideSorting"].as_bool().unwrap_or(false) || ct["m_OverrideSorting"].as_i64() == Some(1) {
-                            node.canvas_order = Some(ct["m_SortingOrder"].as_i64().unwrap_or(0) as i32);
+                        if ct["m_OverrideSorting"].as_bool().unwrap_or(false)
+                            || ct["m_OverrideSorting"].as_i64() == Some(1)
+                        {
+                            node.canvas_order =
+                                Some(ct["m_SortingOrder"].as_i64().unwrap_or(0) as i32);
                         }
                     }
                     212 => {
@@ -281,17 +325,27 @@ impl Prefab {
                             && let Some(s) = sprite(pid(&ct["m_Sprite"]))
                         {
                             let c4 = &ct["m_Color"];
-                            node.sprite_renderer =
-                                Some((s, [f(&c4["r"]), f(&c4["g"]), f(&c4["b"]), f(&c4["a"])], ct["m_SortingOrder"].as_i64().unwrap_or(0) as i32));
+                            node.sprite_renderer = Some((
+                                s,
+                                [f(&c4["r"]), f(&c4["g"]), f(&c4["b"]), f(&c4["a"])],
+                                ct["m_SortingOrder"].as_i64().unwrap_or(0) as i32,
+                            ));
                         }
                     }
                     95 => animator_ctrl = Some(pid(&ct["m_Controller"])),
                     114 => {
-                        let script = tree(pid(&ct["m_Script"])).and_then(|s| s["m_ClassName"].as_str()).unwrap_or("");
+                        let script = tree(pid(&ct["m_Script"]))
+                            .and_then(|s| s["m_ClassName"].as_str())
+                            .unwrap_or("");
                         match script {
-                            "Image" | "CustomImage" | "AtlasImage" if ct["m_Enabled"].as_i64().unwrap_or(1) != 0 => {
+                            "Image" | "CustomImage" | "AtlasImage"
+                                if ct["m_Enabled"].as_i64().unwrap_or(1) != 0 =>
+                            {
                                 let c4 = &ct["m_Color"];
-                                node.image = Some((sprite(pid(&ct["m_Sprite"])), [f(&c4["r"]), f(&c4["g"]), f(&c4["b"]), f(&c4["a"])]));
+                                node.image = Some((
+                                    sprite(pid(&ct["m_Sprite"])),
+                                    [f(&c4["r"]), f(&c4["g"]), f(&c4["b"]), f(&c4["a"])],
+                                ));
                             }
                             "ScenarioEffector" => {
                                 stop_destroys = ct["stopBehaviour"].as_i64().unwrap_or(1) == 1;
@@ -306,9 +360,13 @@ impl Prefab {
             if let (Some(ps), Some(r)) = (ps, psr)
                 && r["m_Enabled"].as_i64().unwrap_or(1) != 0
             {
-                let seed = crc32fast::hash(node.name.as_bytes()) ^ (systems.len() as u32).wrapping_mul(0x9E37_79B9);
+                let seed = crc32fast::hash(node.name.as_bytes())
+                    ^ (systems.len() as u32).wrapping_mul(0x9E37_79B9);
                 let def = SystemDef::parse(ps, r, seed);
-                let mat = r["m_Materials"].as_array().and_then(|m| m.first()).and_then(|m| material(pid(m)));
+                let mat = r["m_Materials"]
+                    .as_array()
+                    .and_then(|m| m.first())
+                    .and_then(|m| material(pid(m)));
                 node.system = Some((systems.len(), mat));
                 systems.push(def);
             }
@@ -318,7 +376,12 @@ impl Prefab {
             }
             nodes.push(node);
             // children in sibling order (stack: push reversed)
-            let kids: Vec<i64> = t["m_Children"].as_array().into_iter().flatten().map(pid).collect();
+            let kids: Vec<i64> = t["m_Children"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(pid)
+                .collect();
             for k in kids.into_iter().rev() {
                 stack.push((k, Some(me)));
             }
@@ -329,7 +392,13 @@ impl Prefab {
             Some(ctrl) => Some(load_animator(&dir, &by, ctrl, &nodes)?),
             None => None,
         };
-        Ok(Prefab { nodes, systems, animator, stop_destroys, play_on_enable })
+        Ok(Prefab {
+            nodes,
+            systems,
+            animator,
+            stop_destroys,
+            play_on_enable,
+        })
     }
 }
 
@@ -337,10 +406,16 @@ impl Prefab {
 fn sibling_pngs(lib: &sse_assets::Library, bundle: &str) -> BTreeMap<i64, String> {
     let mut out = BTreeMap::new();
     let parent = bundle.rsplit_once('/').map_or("", |(p, _)| p);
-    let Ok(entries) = sse_core::fs::read_dir_sorted(&lib.path(parent)) else { return out };
+    let Ok(entries) = sse_core::fs::read_dir_sorted(&lib.path(parent)) else {
+        return out;
+    };
     for dir in entries {
-        let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(str::to_owned) else { continue };
-        let Ok(r) = load_json(&dir.join("_ripper.json")) else { continue };
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        let Ok(r) = load_json(&dir.join("_ripper.json")) else {
+            continue;
+        };
         for fl in r["files"].as_array().into_iter().flatten() {
             if fl["kind"] == "png"
                 && let (Some(id), Some(p)) = (fl["pathId"].as_i64(), fl["path"].as_str())
@@ -369,13 +444,24 @@ fn node_paths(nodes: &[Node]) -> Vec<String> {
     let mut out = vec![String::new(); nodes.len()];
     for i in 1..nodes.len() {
         let p = nodes[i].parent.unwrap_or(0);
-        out[i] = if out[p].is_empty() { nodes[i].name.clone() } else { format!("{}/{}", out[p], nodes[i].name) };
+        out[i] = if out[p].is_empty() {
+            nodes[i].name.clone()
+        } else {
+            format!("{}/{}", out[p], nodes[i].name)
+        };
     }
     out
 }
 
-fn load_animator(dir: &Path, by: &BTreeMap<i64, &Value>, ctrl: i64, nodes: &[Node]) -> Result<Animator, EffectError> {
-    let c = &by.get(&ctrl).ok_or_else(|| EffectError::Load(dir.display().to_string(), "controller".into()))?["tree"];
+fn load_animator(
+    dir: &Path,
+    by: &BTreeMap<i64, &Value>,
+    ctrl: i64,
+    nodes: &[Node],
+) -> Result<Animator, EffectError> {
+    let c = &by
+        .get(&ctrl)
+        .ok_or_else(|| EffectError::Load(dir.display().to_string(), "controller".into()))?["tree"];
     // clips: pathId → sse-motion file (`source.pathId`)
     let mut motions: BTreeMap<i64, SseMotion> = BTreeMap::new();
     if let Ok(files) = sse_core::fs::read_dir_sorted(dir) {
@@ -388,7 +474,11 @@ fn load_animator(dir: &Path, by: &BTreeMap<i64, &Value>, ctrl: i64, nodes: &[Nod
         }
     }
     let paths = node_paths(nodes);
-    let by_hash: BTreeMap<u32, usize> = paths.iter().enumerate().map(|(i, p)| (crc32fast::hash(p.as_bytes()), i)).collect();
+    let by_hash: BTreeMap<u32, usize> = paths
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (crc32fast::hash(p.as_bytes()), i))
+        .collect();
     let prop_of = |type_id: i64, attr: u32| -> Option<Prop> {
         let h = |s: &str| crc32fast::hash(s.as_bytes());
         match type_id {
@@ -404,12 +494,24 @@ fn load_animator(dir: &Path, by: &BTreeMap<i64, &Value>, ctrl: i64, nodes: &[Nod
                 .position(|n| attr == h(n))
                 .map(Prop::Scale)
                 .or_else(|| {
-                    ["m_LocalPosition.x", "m_LocalPosition.y", "m_LocalPosition.z"].iter().position(|n| attr == h(n)).map(Prop::Position)
+                    [
+                        "m_LocalPosition.x",
+                        "m_LocalPosition.y",
+                        "m_LocalPosition.z",
+                    ]
+                    .iter()
+                    .position(|n| attr == h(n))
+                    .map(Prop::Position)
                 }),
             _ => None,
         }
     };
-    let clip_ids: Vec<i64> = c["m_AnimationClips"].as_array().into_iter().flatten().map(pid).collect();
+    let clip_ids: Vec<i64> = c["m_AnimationClips"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(pid)
+        .collect();
     let clips: Vec<Clip> = clip_ids
         .iter()
         .map(|id| match motions.get(id) {
@@ -427,7 +529,12 @@ fn load_animator(dir: &Path, by: &BTreeMap<i64, &Value>, ctrl: i64, nodes: &[Nod
                     })
                     .collect(),
             },
-            None => Clip { length: 0.0, looping: false, start: 0.0, curves: Vec::new() },
+            None => Clip {
+                length: 0.0,
+                looping: false,
+                start: 0.0,
+                curves: Vec::new(),
+            },
         })
         .collect();
     let sm = &c["m_Controller"]["m_StateMachineArray"][0]["data"];
@@ -447,14 +554,18 @@ fn load_animator(dir: &Path, by: &BTreeMap<i64, &Value>, ctrl: i64, nodes: &[Nod
             let exit = d["m_TransitionConstantArray"].as_array().and_then(|ts| {
                 ts.iter().find_map(|t| {
                     let t = &t["data"];
-                    let has_exit = t["m_HasExitTime"].as_bool().unwrap_or(false) || t["m_HasExitTime"].as_i64() == Some(1);
-                    let conds = t["m_ConditionConstantArray"].as_array().map_or(0, |a| a.len());
+                    let has_exit = t["m_HasExitTime"].as_bool().unwrap_or(false)
+                        || t["m_HasExitTime"].as_i64() == Some(1);
+                    let conds = t["m_ConditionConstantArray"]
+                        .as_array()
+                        .map_or(0, |a| a.len());
                     (has_exit && conds == 0).then(|| {
                         (
                             t["m_DestinationState"].as_u64().unwrap_or(0) as usize,
                             f(&t["m_ExitTime"]),
                             f(&t["m_TransitionDuration"]),
-                            t["m_HasFixedDuration"].as_bool().unwrap_or(false) || t["m_HasFixedDuration"].as_i64() == Some(1),
+                            t["m_HasFixedDuration"].as_bool().unwrap_or(false)
+                                || t["m_HasFixedDuration"].as_i64() == Some(1),
                         )
                     })
                 })
@@ -467,7 +578,11 @@ fn load_animator(dir: &Path, by: &BTreeMap<i64, &Value>, ctrl: i64, nodes: &[Nod
             }
         })
         .collect();
-    Ok(Animator { clips, states, default_state: sm["m_DefaultState"].as_u64().unwrap_or(0) as usize })
+    Ok(Animator {
+        clips,
+        states,
+        default_state: sm["m_DefaultState"].as_u64().unwrap_or(0) as usize,
+    })
 }
 
 // ------------------------------------------------------------------ instance
@@ -515,9 +630,17 @@ impl EffectInstance {
     pub fn new(prefab: std::sync::Arc<Prefab>, seed: u32, dt: f32) -> Self {
         let n = prefab.nodes.len();
         let mut inst = EffectInstance {
-            systems: prefab.systems.iter().map(|d| SystemState::new(d, seed)).collect(),
+            systems: prefab
+                .systems
+                .iter()
+                .map(|d| SystemState::new(d, seed))
+                .collect(),
             active: prefab.nodes.iter().map(|n| n.active).collect(),
-            color: prefab.nodes.iter().map(|n| n.image.as_ref().map_or([1.0; 4], |i| i.1)).collect(),
+            color: prefab
+                .nodes
+                .iter()
+                .map(|n| n.image.as_ref().map_or([1.0; 4], |i| i.1))
+                .collect(),
             anchored: prefab
                 .nodes
                 .iter()
@@ -528,11 +651,15 @@ impl EffectInstance {
                 .collect(),
             scale: prefab.nodes.iter().map(|n| n.scale).collect(),
             pos: prefab.nodes.iter().map(|n| n.pos).collect(),
-            anim: prefab.play_on_enable.then_some(()).and(prefab.animator.as_ref()).map(|a| AnimPlay {
-                state: a.default_state,
-                time: 0.0,
-                fade: None,
-            }),
+            anim: prefab
+                .play_on_enable
+                .then_some(())
+                .and(prefab.animator.as_ref())
+                .map(|a| AnimPlay {
+                    state: a.default_state,
+                    time: 0.0,
+                    fade: None,
+                }),
             prefab,
             time: 0.0,
             stopped_at: None,
@@ -578,10 +705,18 @@ impl EffectInstance {
         }
         let stop_hash = crc32fast::hash(b"Stop");
         if let Some(a) = &self.prefab.animator {
-            match a.states.iter().position(|s| s.name_hash == stop_hash && s.clip.is_some()) {
+            match a
+                .states
+                .iter()
+                .position(|s| s.name_hash == stop_hash && s.clip.is_some())
+            {
                 Some(st) => {
                     self.stop_wait = a.clips[a.states[st].clip.unwrap_or(0)].length;
-                    self.anim = Some(AnimPlay { state: st, time: 0.0, fade: None });
+                    self.anim = Some(AnimPlay {
+                        state: st,
+                        time: 0.0,
+                        fade: None,
+                    });
                 }
                 // no Stop clip: the Animator is disabled, its last pose stays
                 None => self.anim = None,
@@ -597,13 +732,17 @@ impl EffectInstance {
         }
         let dt = self.dt;
         self.time += dt;
-        let before: Vec<bool> = (0..self.prefab.nodes.len()).map(|i| self.effective_active(i)).collect();
+        let before: Vec<bool> = (0..self.prefab.nodes.len())
+            .map(|i| self.effective_active(i))
+            .collect();
         if let (Some(play), Some(a)) = (self.anim.as_mut(), self.prefab.animator.as_ref()) {
             advance(play, a, dt);
         }
         self.apply_animator();
         for i in 0..self.prefab.nodes.len() {
-            let Some((s, _)) = self.prefab.nodes[i].system else { continue };
+            let Some((s, _)) = self.prefab.nodes[i].system else {
+                continue;
+            };
             let now = self.effective_active(i);
             let def = &self.prefab.systems[s];
             if now && !before[i] {
@@ -621,7 +760,11 @@ impl EffectInstance {
             }
         }
         if let Some(at) = self.stopped_at {
-            let alive = self.systems.iter().zip(&self.prefab.systems).any(|(s, d)| s.is_alive(d));
+            let alive = self
+                .systems
+                .iter()
+                .zip(&self.prefab.systems)
+                .any(|(s, d)| s.is_alive(d));
             if !alive && self.time - at >= self.stop_wait && self.prefab.stop_destroys {
                 self.finished = true;
             }
@@ -629,12 +772,20 @@ impl EffectInstance {
     }
 
     fn apply_animator(&mut self) {
-        let (Some(play), Some(a)) = (self.anim.as_ref(), self.prefab.animator.as_ref()) else { return };
+        let (Some(play), Some(a)) = (self.anim.as_ref(), self.prefab.animator.as_ref()) else {
+            return;
+        };
         let mut vals: BTreeMap<(usize, Prop), f32> = BTreeMap::new();
         let sample = |state: usize, t: f32, w: f32, vals: &mut BTreeMap<(usize, Prop), f32>| {
-            let Some(ci) = a.states[state].clip else { return };
+            let Some(ci) = a.states[state].clip else {
+                return;
+            };
             let c = &a.clips[ci];
-            let lt = if c.looping && c.length > 0.0 { t % c.length } else { t.min(c.length) };
+            let lt = if c.looping && c.length > 0.0 {
+                t % c.length
+            } else {
+                t.min(c.length)
+            };
             for (node, prop, curve) in &c.curves {
                 let v = curve.evaluate(c.start + lt);
                 let e = vals.entry((*node, *prop)).or_insert(0.0);
@@ -644,7 +795,11 @@ impl EffectInstance {
         match play.fade {
             None => sample(play.state, play.time, 1.0, &mut vals),
             Some((next, nt, el, len)) => {
-                let w = if len > 0.0 { (el / len).clamp(0.0, 1.0) } else { 1.0 };
+                let w = if len > 0.0 {
+                    (el / len).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
                 sample(play.state, play.time, 1.0 - w, &mut vals);
                 sample(next, nt, w, &mut vals);
             }
@@ -676,17 +831,30 @@ impl EffectInstance {
                 None => ([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], parent_rect_root),
             };
             let (local_pos, rect) = match &node.xf {
-                Xf::Rect { anchor_min, anchor_max, size_delta, pivot, .. } => {
+                Xf::Rect {
+                    anchor_min,
+                    anchor_max,
+                    size_delta,
+                    pivot,
+                    ..
+                } => {
                     let a = self.anchored[i];
                     let size = [
                         (anchor_max[0] - anchor_min[0]) * prect[2] + size_delta[0],
                         (anchor_max[1] - anchor_min[1]) * prect[3] + size_delta[1],
                     ];
                     let refp = [
-                        prect[0] + prect[2] * (anchor_min[0] + (anchor_max[0] - anchor_min[0]) * pivot[0]),
-                        prect[1] + prect[3] * (anchor_min[1] + (anchor_max[1] - anchor_min[1]) * pivot[1]),
+                        prect[0]
+                            + prect[2]
+                                * (anchor_min[0] + (anchor_max[0] - anchor_min[0]) * pivot[0]),
+                        prect[1]
+                            + prect[3]
+                                * (anchor_min[1] + (anchor_max[1] - anchor_min[1]) * pivot[1]),
                     ];
-                    ([refp[0] + a[0], refp[1] + a[1]], [-pivot[0] * size[0], -pivot[1] * size[1], size[0], size[1]])
+                    (
+                        [refp[0] + a[0], refp[1] + a[1]],
+                        [-pivot[0] * size[0], -pivot[1] * size[1], size[0], size[1]],
+                    )
                 }
                 Xf::Plain => ([self.pos[i][0], self.pos[i][1]], [0.0; 4]),
             };
@@ -718,22 +886,61 @@ impl EffectInstance {
             let node = &self.prefab.nodes[i];
             let canvas_order = self.canvas_order(i);
             let w = world[i];
-            let tf = |p: [f32; 2]| [w[0] * p[0] + w[1] * p[1] + w[2], w[3] * p[0] + w[4] * p[1] + w[5]];
+            let tf = |p: [f32; 2]| {
+                [
+                    w[0] * p[0] + w[1] * p[1] + w[2],
+                    w[3] * p[0] + w[4] * p[1] + w[5],
+                ]
+            };
             if let Some((sprite, _)) = &node.image {
                 let r = rects[i];
-                let corners = [tf([r[0], r[1]]), tf([r[0] + r[2], r[1]]), tf([r[0] + r[2], r[1] + r[3]]), tf([r[0], r[1] + r[3]])];
+                let corners = [
+                    tf([r[0], r[1]]),
+                    tf([r[0] + r[2], r[1]]),
+                    tf([r[0] + r[2], r[1] + r[3]]),
+                    tf([r[0], r[1] + r[3]]),
+                ];
                 let (tex, uv) = match sprite {
                     Some(s) => (Some(s.tex.png.clone()), s.tex.uv),
                     None => (None, [0.0, 0.0, 1.0, 1.0]),
                 };
-                out.push((canvas_order, 0.0, seq, EffectQuad { order: canvas_order, corners, uv, color: self.color[i], tex, blend: Blend::Alpha }));
+                out.push((
+                    canvas_order,
+                    0.0,
+                    seq,
+                    EffectQuad {
+                        order: canvas_order,
+                        corners,
+                        uv,
+                        color: self.color[i],
+                        tex,
+                        blend: Blend::Alpha,
+                    },
+                ));
                 seq += 1;
             }
             if let Some((s, col, order)) = &node.sprite_renderer {
                 let (sw, sh) = (s.size[0] / s.ppu, s.size[1] / s.ppu);
                 let (x0, y0) = (-s.pivot[0] * sw, -s.pivot[1] * sh);
-                let corners = [tf([x0, y0]), tf([x0 + sw, y0]), tf([x0 + sw, y0 + sh]), tf([x0, y0 + sh])];
-                out.push((*order, -node.pos[2], seq, EffectQuad { order: *order, corners, uv: s.tex.uv, color: *col, tex: Some(s.tex.png.clone()), blend: Blend::Alpha }));
+                let corners = [
+                    tf([x0, y0]),
+                    tf([x0 + sw, y0]),
+                    tf([x0 + sw, y0 + sh]),
+                    tf([x0, y0 + sh]),
+                ];
+                out.push((
+                    *order,
+                    -node.pos[2],
+                    seq,
+                    EffectQuad {
+                        order: *order,
+                        corners,
+                        uv: s.tex.uv,
+                        color: *col,
+                        tex: Some(s.tex.png.clone()),
+                        blend: Blend::Alpha,
+                    },
+                ));
                 seq += 1;
             }
             if let Some((si, mat)) = &node.system {
@@ -744,7 +951,8 @@ impl EffectInstance {
                 let tex = mat.as_ref().and_then(|m| m.tex.clone());
                 let blend = mat.as_ref().map_or(Blend::Alpha, |m| m.blend);
                 for (corners, uv, color) in self.systems[*si].quads(def) {
-                    let px = corners.map(|c| [origin[0] + c[0] * sx * wu, origin[1] + c[1] * sy * wu]);
+                    let px =
+                        corners.map(|c| [origin[0] + c[0] * sx * wu, origin[1] + c[1] * sy * wu]);
                     let base = tex.as_ref().map_or([0.0, 0.0, 1.0, 1.0], |t| t.uv);
                     // particle UVs have v up; convert into the texture's (v down) sub-rect
                     let bu = |u: f32| base[0] + (base[2] - base[0]) * u;
@@ -754,7 +962,14 @@ impl EffectInstance {
                         def.sorting_order,
                         -node.pos[2],
                         seq,
-                        EffectQuad { order: def.sorting_order, corners: px, uv: quad_uv, color, tex: tex.as_ref().map(|t| t.png.clone()), blend },
+                        EffectQuad {
+                            order: def.sorting_order,
+                            corners: px,
+                            uv: quad_uv,
+                            color,
+                            tex: tex.as_ref().map(|t| t.png.clone()),
+                            blend,
+                        },
                     ));
                 }
                 seq += 1;
@@ -791,7 +1006,12 @@ fn mul(a: [f32; 6], b: [f32; 6]) -> [f32; 6] {
 
 /// One Animator frame: state time, exit-time transitions with their crossfade.
 fn advance(play: &mut AnimPlay, a: &Animator, dt: f32) {
-    let len = |s: usize| a.states[s].clip.map_or(0.0, |c| a.clips[c].length).max(1e-4);
+    let len = |s: usize| {
+        a.states[s]
+            .clip
+            .map_or(0.0, |c| a.clips[c].length)
+            .max(1e-4)
+    };
     play.time += dt * a.states[play.state].speed;
     if let Some((next, nt, el, fl)) = play.fade.as_mut() {
         *nt += dt * a.states[*next].speed;

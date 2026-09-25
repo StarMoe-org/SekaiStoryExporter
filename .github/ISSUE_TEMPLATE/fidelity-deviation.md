@@ -9,7 +9,7 @@ labels: fidelity
 ## 类型 / Type
 
 - [ ] **T1** 跨平台 / cross-platform (macOS renderer vs Windows renderer)
-- [ ] **T2** 对游戏 / against the game (renderer vs PlayCover ground truth)
+- [ ] **T2** 对游戏 / against the game (renderer vs the same scene in the game)
 
 ## 复现坐标 / Reproduction coordinates
 

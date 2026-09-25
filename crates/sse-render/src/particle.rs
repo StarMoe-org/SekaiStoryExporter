@@ -42,7 +42,14 @@ fn keys(curve: &Value, scale: f32) -> Vec<Key> {
         .as_array()
         .map(|a| {
             a.iter()
-                .map(|k| (fv(k, "time"), fv(k, "value") * scale, fv(k, "inSlope") * scale, fv(k, "outSlope") * scale))
+                .map(|k| {
+                    (
+                        fv(k, "time"),
+                        fv(k, "value") * scale,
+                        fv(k, "inSlope") * scale,
+                        fv(k, "outSlope") * scale,
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -131,9 +138,16 @@ impl Gradient {
         let key = |i: usize| &g[format!("key{i}")];
         Gradient {
             colors: (0..nc)
-                .map(|i| (fv(g, &format!("ctime{i}")) / 65535.0, [fv(key(i), "r"), fv(key(i), "g"), fv(key(i), "b")]))
+                .map(|i| {
+                    (
+                        fv(g, &format!("ctime{i}")) / 65535.0,
+                        [fv(key(i), "r"), fv(key(i), "g"), fv(key(i), "b")],
+                    )
+                })
                 .collect(),
-            alphas: (0..na).map(|i| (fv(g, &format!("atime{i}")) / 65535.0, fv(key(i), "a"))).collect(),
+            alphas: (0..na)
+                .map(|i| (fv(g, &format!("atime{i}")) / 65535.0, fv(key(i), "a")))
+                .collect(),
             fixed: g["m_Mode"].as_i64() == Some(1),
         }
     }
@@ -154,7 +168,8 @@ impl Gradient {
                             }
                             let u = (t - w[0].0) / (w[1].0 - w[0].0).max(1e-6);
                             let mut out = w[0].1;
-                            for (o, (a, b)) in out.iter_mut().zip(w[0].1.iter().zip(w[1].1.iter())) {
+                            for (o, (a, b)) in out.iter_mut().zip(w[0].1.iter().zip(w[1].1.iter()))
+                            {
                                 *o = a + (b - a) * u;
                             }
                             return out;
@@ -189,7 +204,10 @@ impl ColorSpec {
         match v["minMaxState"].as_i64().unwrap_or(0) {
             1 | 4 => ColorSpec::Gradient(Gradient::parse(&v["maxGradient"])),
             2 => ColorSpec::TwoColors(rgba(&v["minColor"]), rgba(&v["maxColor"])),
-            3 => ColorSpec::TwoGradients(Gradient::parse(&v["minGradient"]), Gradient::parse(&v["maxGradient"])),
+            3 => ColorSpec::TwoGradients(
+                Gradient::parse(&v["minGradient"]),
+                Gradient::parse(&v["maxGradient"]),
+            ),
             _ => ColorSpec::Color(rgba(&v["maxColor"])),
         }
     }
@@ -320,12 +338,21 @@ impl SystemDef {
             lifetime: Curve::parse(&i["startLifetime"]),
             speed: Curve::parse(&i["startSpeed"]),
             size: Curve::parse(&i["startSize"]),
-            size3d: bv(i, "size3D").then(|| (Curve::parse(&i["startSizeY"]), Curve::parse(&i["startSizeZ"]))),
+            size3d: bv(i, "size3D").then(|| {
+                (
+                    Curve::parse(&i["startSizeY"]),
+                    Curve::parse(&i["startSizeZ"]),
+                )
+            }),
             rotation: Curve::parse(&i["startRotation"]),
             color: ColorSpec::parse(&i["startColor"]),
             gravity: Curve::parse(&i["gravityModifier"]),
             max_particles: i["maxNumParticles"].as_u64().unwrap_or(1000) as usize,
-            rate: if bv(em, "enabled") { Curve::parse(&em["rateOverTime"]) } else { Curve::Const(0.0) },
+            rate: if bv(em, "enabled") {
+                Curve::parse(&em["rateOverTime"])
+            } else {
+                Curve::Const(0.0)
+            },
             bursts,
             shape: Shape {
                 enabled: bv(sh, "enabled"),
@@ -343,7 +370,12 @@ impl SystemDef {
             },
             velocity: on("VelocityModule").then(|| {
                 let v = &ps["VelocityModule"];
-                [Curve::parse(&v["x"]), Curve::parse(&v["y"]), Curve::parse(&v["z"]), Curve::parse(&v["speedModifier"])]
+                [
+                    Curve::parse(&v["x"]),
+                    Curve::parse(&v["y"]),
+                    Curve::parse(&v["z"]),
+                    Curve::parse(&v["speedModifier"]),
+                ]
             }),
             clamp: on("ClampVelocityModule").then(|| {
                 let c = &ps["ClampVelocityModule"];
@@ -358,11 +390,16 @@ impl SystemDef {
             rotation_ol: on("RotationModule").then(|| Curve::parse(&ps["RotationModule"]["curve"])),
             noise: on("NoiseModule").then(|| {
                 let n = &ps["NoiseModule"];
-                (Curve::parse(&n["strength"]), fv(n, "frequency").max(1e-4), bv(n, "damping"))
+                (
+                    Curve::parse(&n["strength"]),
+                    fv(n, "frequency").max(1e-4),
+                    bv(n, "damping"),
+                )
             }),
             sheet: on("UVModule").then(|| {
                 let u = &ps["UVModule"];
-                let row = (u["animationType"].as_i64() == Some(1)).then(|| u["rowIndex"].as_u64().unwrap_or(0) as u32);
+                let row = (u["animationType"].as_i64() == Some(1))
+                    .then(|| u["rowIndex"].as_u64().unwrap_or(0) as u32);
                 (
                     u["tilesX"].as_u64().unwrap_or(1).max(1) as u32,
                     u["tilesY"].as_u64().unwrap_or(1).max(1) as u32,
@@ -431,7 +468,11 @@ fn unit(s: &mut u32) -> f32 {
 
 /// `Quaternion.Euler(x, y, z)` = `Ry·Rx·Rz`, degrees.
 fn rot_euler(v: [f32; 3], deg: [f32; 3]) -> [f32; 3] {
-    let (rx, ry, rz) = (deg[0].to_radians(), deg[1].to_radians(), deg[2].to_radians());
+    let (rx, ry, rz) = (
+        deg[0].to_radians(),
+        deg[1].to_radians(),
+        deg[2].to_radians(),
+    );
     let (sx, cx) = (sinf(rx), cosf(rx));
     let (sy, cy) = (sinf(ry), cosf(ry));
     let (sz, cz) = (sinf(rz), cosf(rz));
@@ -449,7 +490,11 @@ fn rot_euler(v: [f32; 3], deg: [f32; 3]) -> [f32; 3] {
 
 fn norm(v: [f32; 3]) -> [f32; 3] {
     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if l < 1e-6 { [0.0, 0.0, 1.0] } else { [v[0] / l, v[1] / l, v[2] / l] }
+    if l < 1e-6 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [v[0] / l, v[1] / l, v[2] / l]
+    }
 }
 
 impl SystemState {
@@ -561,13 +606,31 @@ impl SystemState {
         let life = def.lifetime.eval(unit(r), 0.0).max(1e-3);
         let speed = def.speed.eval(unit(r), 0.0);
         let sx = def.size.eval(unit(r), 0.0);
-        let sy = def.size3d.as_ref().map_or(sx, |(y, _)| y.eval(unit(r), 0.0));
-        let (pos, dir) = if def.shape.enabled { shape_sample(&def.shape, r) } else { ([0.0; 3], [0.0, 0.0, 1.0]) };
+        let sy = def
+            .size3d
+            .as_ref()
+            .map_or(sx, |(y, _)| y.eval(unit(r), 0.0));
+        let (pos, dir) = if def.shape.enabled {
+            shape_sample(&def.shape, r)
+        } else {
+            ([0.0; 3], [0.0, 0.0, 1.0])
+        };
         let vel = [dir[0] * speed, dir[1] * speed, dir[2] * speed];
         let color = def.color.eval(unit(r), 0.0);
         let rot = def.rotation.eval(unit(r), 0.0);
         let seed = next_u32(r);
-        self.particles.push(Particle { pos, vel, cur_vel: vel, age: 0.0, life, size: [sx, sy], rot, color, rnd, seed });
+        self.particles.push(Particle {
+            pos,
+            vel,
+            cur_vel: vel,
+            age: 0.0,
+            life,
+            size: [sx, sy],
+            rot,
+            color,
+            rnd,
+            seed,
+        });
     }
 
     #[allow(clippy::needless_range_loop)] // parallel xyz arrays
@@ -661,7 +724,11 @@ impl SystemState {
                     // along the particle's current velocity, the head at the particle
                     let d = [p.cur_vel[0], p.cur_vel[1]];
                     let sp = (d[0] * d[0] + d[1] * d[1]).sqrt();
-                    let (ux, uy) = if sp < 1e-6 { (0.0, 1.0) } else { (d[0] / sp, d[1] / sp) };
+                    let (ux, uy) = if sp < 1e-6 {
+                        (0.0, 1.0)
+                    } else {
+                        (d[0] / sp, d[1] / sp)
+                    };
                     let len = h * def.length_scale + sp * def.velocity_scale;
                     let (hl, hw) = (len * 0.5, w * 0.5);
                     // the texture's v runs along the velocity, head at the particle
@@ -694,7 +761,13 @@ fn sheet_uv(def: &SystemDef, p: &Particle, t: f32) -> [f32; 4] {
     };
     let per_row = *tx;
     let frames = if row.is_some() { *tx } else { tx * ty };
-    let ft = ((t * cycles) % 1.0 + if (t * cycles) >= 1.0 && (t * cycles) % 1.0 == 0.0 { 1.0 } else { 0.0 }).min(1.0);
+    let ft = ((t * cycles) % 1.0
+        + if (t * cycles) >= 1.0 && (t * cycles) % 1.0 == 0.0 {
+            1.0
+        } else {
+            0.0
+        })
+    .min(1.0);
     let k = (frame.eval(p.rnd[2], ft) + start.eval(p.rnd[3], 0.0)) * frames as f32;
     let idx = (k.floor().max(0.0) as u32).min(frames - 1);
     let (col, r) = match row {
@@ -703,7 +776,12 @@ fn sheet_uv(def: &SystemDef, p: &Particle, t: f32) -> [f32; 4] {
     };
     let (w, h) = (1.0 / *tx as f32, 1.0 / *ty as f32);
     // tile 0 is the top-left; UVs have v up
-    [col as f32 * w, 1.0 - (r + 1) as f32 * h, (col + 1) as f32 * w, 1.0 - r as f32 * h]
+    [
+        col as f32 * w,
+        1.0 - (r + 1) as f32 * h,
+        (col + 1) as f32 * w,
+        1.0 - r as f32 * h,
+    ]
 }
 
 /// A point and direction on the emission shape (before the emitter transform).
@@ -721,7 +799,11 @@ fn shape_sample(s: &Shape, r: &mut u32) -> ([f32; 3], [f32; 3]) {
             if s.kind >= 2 {
                 d[2] = d[2].abs();
             }
-            let rad = if s.kind == 1 || s.kind == 3 { s.radius } else { s.radius * shell(r, s.radius_thickness).cbrt() };
+            let rad = if s.kind == 1 || s.kind == 3 {
+                s.radius
+            } else {
+                s.radius * shell(r, s.radius_thickness).cbrt()
+            };
             ([d[0] * rad, d[1] * rad, d[2] * rad], d)
         }
         // cone variants: base disc, direction opening by `angle`
@@ -730,8 +812,15 @@ fn shape_sample(s: &Shape, r: &mut u32) -> ([f32; 3], [f32; 3]) {
             let rr = s.radius * shell(r, s.radius_thickness).sqrt();
             let (ca, sa) = (cosf(a), sinf(a));
             let open = s.angle.to_radians();
-            let tilt = if s.radius > 1e-6 { rr / s.radius * open } else { unit(r) * open };
-            ([ca * rr, sa * rr, 0.0], norm([ca * sinf(tilt), sa * sinf(tilt), cosf(tilt)]))
+            let tilt = if s.radius > 1e-6 {
+                rr / s.radius * open
+            } else {
+                unit(r) * open
+            };
+            (
+                [ca * rr, sa * rr, 0.0],
+                norm([ca * sinf(tilt), sa * sinf(tilt), cosf(tilt)]),
+            )
         }
         // box (volume / shell / edge): emits along +z
         5 | 15 | 16 => {
@@ -741,12 +830,19 @@ fn shape_sample(s: &Shape, r: &mut u32) -> ([f32; 3], [f32; 3]) {
         // circle / circle edge: in the XY plane, outward
         10 | 11 => {
             let a = unit(r) * s.arc.to_radians();
-            let rr = if s.kind == 11 { s.radius } else { s.radius * shell(r, s.radius_thickness).sqrt() };
+            let rr = if s.kind == 11 {
+                s.radius
+            } else {
+                s.radius * shell(r, s.radius_thickness).sqrt()
+            };
             let (ca, sa) = (cosf(a), sinf(a));
             ([ca * rr, sa * rr, 0.0], [ca, sa, 0.0])
         }
         // single-sided edge: a line along x, emitting along +y
-        12 => ([(unit(r) * 2.0 - 1.0) * s.radius, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        12 => (
+            [(unit(r) * 2.0 - 1.0) * s.radius, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ),
         // rectangle: the XY unit square, emitting along +z
         18 => ([unit(r) - 0.5, unit(r) - 0.5, 0.0], [0.0, 0.0, 1.0]),
         _ => ([0.0; 3], [0.0, 0.0, 1.0]),
@@ -774,7 +870,14 @@ fn shape_sample(s: &Shape, r: &mut u32) -> ([f32; 3], [f32; 3]) {
     }
     let pos = rot_euler(pos, s.rotation);
     let dir = rot_euler(dir, s.rotation);
-    ([pos[0] + s.position[0], pos[1] + s.position[1], pos[2] + s.position[2]], dir)
+    (
+        [
+            pos[0] + s.position[0],
+            pos[1] + s.position[1],
+            pos[2] + s.position[2],
+        ],
+        dir,
+    )
 }
 
 impl SystemDef {
@@ -832,6 +935,9 @@ mod tests {
         .unwrap();
         let g = Gradient::parse(&g);
         let c = g.at(0.25);
-        assert!((c[0] - 0.25).abs() < 1e-3 && (c[3] - 0.5).abs() < 2e-3, "{c:?}");
+        assert!(
+            (c[0] - 0.25).abs() < 1e-3 && (c[3] - 0.5).abs() < 2e-3,
+            "{c:?}"
+        );
     }
 }

@@ -2,15 +2,15 @@
 //!
 //! ## Responsibilities
 //! - Read-only loading of SekaiStoryRipper output: `ripper-episode` indexes and
-//!   `sse-motion` clips via `ripper-format` (decisions Q25 / Q26)
+//!   `sse-motion` clips via `ripper-format` (ADR-0006)
 //! - Reject unknown `format` / `version` values instead of guessing
 //! - **Explicit failure with a list of missing assets**, pointing at `ripper rip <selector>`.
 //!   Silent degradation is forbidden
 //! - Recording the asset version from `ripper.lock.json`
 //!
 //! ## Not responsible for
-//! - Downloading or decrypting anything (decision Q25: sse has no CDN or key handling)
-//! - Resolving motion/facial bundles; the episode index is trusted (decision Q29)
+//! - Downloading or decrypting anything (ADR-0006: sse has no CDN or key handling)
+//! - Resolving motion/facial bundles; the episode index is trusted (ADR-0007)
 //! - Interpreting asset contents (each consuming crate does that)
 //!
 //! ## Allowed dependencies
@@ -52,10 +52,7 @@ pub enum AssetError {
         source: image::ImageError,
     },
     #[error("{path}: wav: {source}")]
-    Wav {
-        path: PathBuf,
-        source: hound::Error,
-    },
+    Wav { path: PathBuf, source: hound::Error },
     #[error(
         "{} asset(s) listed in the episode index are missing from the library:\n{}\n\
          run `ripper rip {selector}` to (re)export them",
@@ -129,7 +126,12 @@ impl Library {
             }
         }
         paths.extend(index.backgrounds.values().map(|b| b.path.as_str()));
-        for audio in index.bgm.values().chain(index.se.values()).chain(index.voices.values()) {
+        for audio in index
+            .bgm
+            .values()
+            .chain(index.se.values())
+            .chain(index.voices.values())
+        {
             paths.extend(audio.files.iter().map(String::as_str));
         }
         let mut missing: Vec<String> = paths
