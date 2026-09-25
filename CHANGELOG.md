@@ -6,6 +6,17 @@
 **Project-specific rule**: any change that alters output pixels must be recorded here
 together with its impact.
 
+## 未发布
+
+### 修复 / Fixed
+
+- **对话框文字描边宽度**：描边层（`WordsOutline` / `NameOutline`，shader `Sekai/TextMeshPro/Mobile/Distance Field`）
+  的外扩量按客户端 shader 代码与材质参数计算：`(_FaceDilate 0.5 + _OutlineWidth 0.5) × ratioA / 2` 个 SDF 单位，
+  1 SDF 单位 = 12 个图集像素（由游戏自带的 SDF 图集实测），即 4.21 × 字号 / 35 像素。此前只计入了 `_FaceDilate`，
+  且用的是拟合值，描边只有游戏的约 40%。描边改用精确的欧氏距离变换生成。
+  **像素影响**：CN 与 JP 所有对话框文字、名字的描边变宽（44 号字 1080p 下约 2.3 px → 5.8 px），与游戏录像对照一致。
+  Talk window text outlines now follow the client's shader: about 2.5× wider than before.
+
 ## 0.1.0（2026-09-25）
 
 首个公开版本。把 SekaiStoryRipper 导出的剧情（CN 6.4.0 / JP 6.8.1）渲染成与游戏一致的自动播放视频。
