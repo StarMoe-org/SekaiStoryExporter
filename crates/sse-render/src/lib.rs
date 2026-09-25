@@ -23,6 +23,7 @@
 mod effect;
 mod fx;
 mod gpu;
+mod hologram;
 mod movie;
 mod native_ui;
 mod particle;
@@ -112,6 +113,9 @@ pub struct Renderer {
     /// Live instances by (bundle, name, seed): the instance and its age in frames.
     effects: BTreeMap<(String, String, u32), (effect::EffectInstance, u32)>,
     white: gpu::Image,
+    /// `holo` (the hologram shader's `_SubTex`) from the `--ui` dir; without it the scan-line
+    /// term is left out.
+    scan: Option<hologram::ScanTexture>,
 }
 
 impl Renderer {
@@ -151,6 +155,7 @@ impl Renderer {
             (Some(t), Some(l)) => Some((gpu.image(&t), gpu.image(&l))),
             _ => None,
         };
+        let scan = hologram::ScanTexture::load(&ui.sprites.join(hologram::ScanTexture::FILE));
         let font =
             |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
         Ok(Self {
@@ -183,6 +188,7 @@ impl Renderer {
                 1,
                 image::Rgba([255, 255, 255, 255]),
             )),
+            scan,
             gpu,
         })
     }
@@ -252,6 +258,12 @@ impl Renderer {
                 opacity: c.opacity,
                 color: c.color,
                 rect: [cx - qw * 0.5, top, qw, qh],
+                hologram: c.hologram.map(|h| gpu::Hologram {
+                    line: h.line,
+                    alpha: h.alpha,
+                    // no texture: a sample above every `_Line` adds nothing
+                    scan: self.scan.as_ref().map_or(1.0, |s| s.sample(h.time)),
+                }),
             });
         }
 
@@ -331,19 +343,16 @@ impl Renderer {
         }
         if let Some(t) = &frame.talk {
             if self.native.has_window() {
-                let first = plan.ui.len();
                 let auto_w = self.name_font.preferred_width(
                     "AUTO",
                     native_ui::layout::AUTO_TEXT_SIZE,
                     native_ui::layout::AUTO_TEXT_SPACING,
                 );
+                // ShakeWindow moves `windowRectTransform`, which the prefab points at
+                // `Window/ContentRoot/Content/Text`: only the name and words layers (shaken in
+                // `text_canvas`). The window, name bar and AUTO signal stay put.
                 self.native
                     .talk(&mut plan.ui, k, t.window_alpha, t.auto_time, auto_w);
-                // ShakeWindow moves `windowRectTransform` (the window, name and words)
-                let [wx, wy] = frame.window_shake;
-                for q in &mut plan.ui[first..] {
-                    q.translate(wx * k, -wy * k);
-                }
             } else if let Some(img) = &self.dialog_overlay {
                 plan.ui.push(gpu::QuadDraw::image(
                     img.id,
@@ -382,6 +391,24 @@ impl Renderer {
     ) -> Result<(), RenderError> {
         let dt = 1.0 / self.fps as f32;
         let mut keep = std::collections::BTreeSet::new();
+        // prefabs attached to a model view: its RectTransform (pivot (0.5, 0) at the
+        // transform data, sizeDelta = RT size, localScale = contentH × baseScale / 1024)
+        let mut parents = BTreeMap::new();
+        for e in &frame.effects {
+            let Some(id) = e.character else { continue };
+            let Some(c) = frame.characters.iter().find(|c| c.character == id) else {
+                continue;
+            };
+            let s = content[1] * c.scale / consts::LIVE2D_SCALE_REFERENCE_HEIGHT;
+            let [rtw, rth] = consts::LIVE2D_RT_SIZE.map(|v| v as f32);
+            parents.insert(
+                (e.bundle.clone(), e.name.clone(), e.seed),
+                effect::Parent {
+                    matrix: [s, 0.0, c.x, 0.0, s, c.y - content[1] * 0.5],
+                    rect: [-rtw * 0.5, 0.0, rtw, rth],
+                },
+            );
+        }
         for e in &frame.effects {
             let pk = (e.bundle.clone(), e.name.clone());
             if !self.prefabs.contains_key(&pk) {
@@ -425,10 +452,21 @@ impl Renderer {
                 screen[1] * 0.5 - (p[1] + sy) * k,
             ]
         };
+        let attached: std::collections::BTreeSet<_> = frame
+            .effects
+            .iter()
+            .filter(|e| e.character.is_some())
+            .map(|e| (e.bundle.clone(), e.name.clone(), e.seed))
+            .collect();
         let quads: Vec<effect::EffectQuad> = self
             .effects
-            .values()
-            .flat_map(|(inst, _)| inst.quads(content))
+            .iter()
+            .flat_map(|(key, (inst, _))| match parents.get(key) {
+                Some(p) => inst.quads_under(content, p),
+                // attached to a character that is not drawn this frame
+                None if attached.contains(key) => Vec::new(),
+                None => inst.quads(content),
+            })
             .collect();
         if std::env::var_os("SSE_DEBUG_EFFECTS").is_some() {
             for ((b, n, s), (inst, age)) in &self.effects {

@@ -19,5 +19,6 @@
 | [0012](0012-versioning.md) | 版本策略 | accepted |
 | [0013](0013-language-and-naming.md) | 项目语言与命名 | accepted |
 | [0014](0014-ci-and-release.md) | CI、测试数据与发布 | accepted |
+| [0015](0015-s3.md) | 从 S3 读取 library、把输出写到 S3 | accepted |
 
 模板见 [`0000-template.md`](0000-template.md)。

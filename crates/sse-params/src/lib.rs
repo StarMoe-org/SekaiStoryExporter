@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PARAM_TABLE_VERSION: u32 = 4;
+pub const PARAM_TABLE_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamTable {
@@ -74,6 +74,10 @@ pub struct EffectState {
     pub stop_age: Option<u32>,
     /// Instance identity and random seed (the instantiation frame).
     pub seed: u32,
+    /// `ScenarioModelView.AttachModelScenarioEffect`: the prefab hangs off this character's
+    /// model view (and moves and scales with it) instead of `effectLayer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character: Option<i32>,
 }
 
 /// One live `fx_transition_scenario` copy. The prefab hangs off `ScenarioPlayer.effectLayer`
@@ -111,6 +115,21 @@ pub struct CharacterState {
     pub color: [f32; 4],
     /// Final Cubism parameter values, in the model's parameter order.
     pub params: Vec<f32>,
+    /// `Live2DHologramController` on the model's `RawImage` (character shader "hologram" /
+    /// "monitor").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hologram: Option<HologramState>,
+}
+
+/// The `Live2D/Materials/Live2DHologram` instance's animated values this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct HologramState {
+    /// `_Line`: scan-line threshold.
+    pub line: f32,
+    /// `_SubColor.a`: output alpha factor.
+    pub alpha: f32,
+    /// Shader `_Time.y` (seconds since the scene loaded; scrolls `_SubTex`).
+    pub time: f32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

@@ -95,6 +95,18 @@ pub struct CharacterDraw {
     pub color: [f32; 4],
     /// Composite rectangle of the RT in target pixels.
     pub rect: [f32; 4],
+    /// `Live2DHologram` material on the `RawImage` instead of `UI/Default`.
+    pub hologram: Option<Hologram>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Hologram {
+    /// `_Line`
+    pub line: f32,
+    /// `_SubColor.a`
+    pub alpha: f32,
+    /// `_SubTex.r` this frame
+    pub scan: f32,
 }
 
 #[derive(Default)]
@@ -138,6 +150,8 @@ struct QuadGpu {
     uv: [f32; 4],
     color: [f32; 4],
     target: [f32; 4],
+    /// mode 2 (hologram): `_Line`, `_SubColor.a`, `_SubTex.r`
+    extra: [f32; 4],
 }
 
 #[repr(C)]
@@ -810,6 +824,7 @@ impl Gpu {
                         uv: q.uv,
                         color: q.color,
                         target: [w, h, if q.premultiplied { 1.0 } else { 0.0 }, 0.0],
+                        extra: [0.0; 4],
                     },
                 )
             })
@@ -858,6 +873,7 @@ impl Gpu {
             uv: [0.0; 4],
             color: [1.0; 4],
             target: [w, h, 0.0, 0.0],
+            extra: [0.0; 4],
         };
         let bgs: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.quad_bind(d.image, q)).collect();
         let mut rp = Self::pass(enc, target, None);
@@ -1090,11 +1106,16 @@ impl Gpu {
             let mut enc = self.device.create_command_encoder(&Default::default());
             self.character(models, c, &mut enc);
             let rt_view = self.rt.view.clone();
+            let (mode, extra) = match c.hologram {
+                Some(g) => (2.0, [g.line, g.alpha, g.scan, 0.0]),
+                None => (0.0, [0.0; 4]),
+            };
             let q = QuadGpu {
                 rect: c.rect,
                 uv: [0.0, 0.0, 1.0, 1.0],
                 color: [c.color[0], c.color[1], c.color[2], c.opacity],
-                target: [w, h, 0.0, 0.0],
+                target: [w, h, mode, 0.0],
+                extra,
             };
             let bg = self.view_bind(&rt_view, bytemuck::bytes_of(&q));
             self.draw_quads(&mut enc, &self.scene.view, &[bg], None);

@@ -66,7 +66,7 @@ SekaiStoryExporter/
 ```
 sse-core            ← 无 sse-* 依赖（坐标系 newtype / det_math / 时间基）
 sse-ir              ← core
-sse-assets          ← core, ripper-format（外部，仅 serde 类型，ADR-0006）
+sse-assets          ← core, ripper-format（外部，仅 serde 类型，ADR-0006）；远端 library 另用 reqwest + rusty-s3（ADR-0015）
 sse-scenario        ← core, ir, assets
 sse-timeline        ← core, ir, assets
 sse-live2d          ← core, assets          （唯一允许 unsafe 的 crate；运行时加载 Cubism Core）

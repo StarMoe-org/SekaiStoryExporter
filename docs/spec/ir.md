@@ -1,6 +1,6 @@
-# IR 规约 v1
+# IR 规约 v3
 
-> **状态：v1 定稿（2026-09-24）。** 依据 [ADR-0008](../adr/0008-ir.md)。
+> **状态：v3（2026-09-25）。** 依据 [ADR-0008](../adr/0008-ir.md)。v2 → v3：`Layout` 增加 `motion` / `facial`，任何布局类型都会先换动作与表情（`SnippetActionCharacterLayout` 在类型分支之前执行）；出场仍由 `Appear` 自带。
 
 IR（Intermediate Representation，中间表示）是 `sse-scenario`（解析）与 `sse-timeline`（调度模拟）之间的接缝：
 

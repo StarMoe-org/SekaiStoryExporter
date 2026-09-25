@@ -11,6 +11,7 @@ This script reads them from the client's `Data` and writes:
     <out>/<sprite>.png                  talk window and menu sprites
     <out>/tex_common_tri_01.png         transition triangle atlas
     <out>/tex_transition_{top,left}.png side fade edges
+    <out>/holo.png                      hologram character shader scan lines
     <out>/FOT-RodinNTLGPro-{DB,EB}.otf  the fonts the talk window uses
     <out>/fx_transition_scenario.json   the transition particle systems (`sse-fx` v1)
 
@@ -42,7 +43,7 @@ SPRITES = [
 ]
 ATLAS_PREFERENCE = ["ScenarioAtlas", "CommonAtlas"]
 # Full textures (not sprites); the largest texture of each name is the one in use.
-TEXTURES = ["tex_common_tri_01", "tex_transition_top", "tex_transition_left"]
+TEXTURES = ["tex_common_tri_01", "tex_transition_top", "tex_transition_left", "holo"]
 FONTS = ["FOT-RodinNTLGPro-DB", "FOT-RodinNTLGPro-EB"]
 FX_PREFAB = "fx_transition_scenario"
 

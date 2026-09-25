@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub const IR_VERSION: u32 = 2;
+pub const IR_VERSION: u32 = 3;
 
 pub type CharacterId = i32;
 
@@ -267,6 +267,12 @@ pub enum Axis {
 pub struct Layout {
     pub character: CharacterId,
     pub op: LayoutOp,
+    /// `SnippetActionCharacterLayout` changes the body motion and the facial before it branches
+    /// on the layout type, so every type can carry them. `Appear` keeps its own in the op.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facial: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -6,6 +6,36 @@
 **Project-specific rule**: any change that alters output pixels must be recorded here
 together with its impact.
 
+## 未发布
+
+### 新增 / Added
+
+- **S3**：`--library s3://bucket/prefix` 直接读取 SekaiStoryRipper 发布到 S3（或 MinIO、R2 等兼容服务）的 library，按 episode 只同步所需文件到本地缓存（`--cache-dir` / `SSE_CACHE_DIR`）；`-o s3://bucket/key` 渲染完成后上传视频与报告。凭据只从 `AWS_*` 环境变量读取。见 ADR-0015。无像素影响（与本地 library 逐字节相同）。
+  `--library` and `-o` accept `s3://` URLs; only the files an episode needs are fetched.
+- **角色着色器（特效 22）**：`SpecialEffectChangeCharacterShader` 的 "hologram" / "monitor" 给角色的 `RawImage` 换上
+  `Live2D/Materials/Live2DHologram` 材质（单色化偏青、整体透明度 0.85–0.9 随机闪烁、扫描线亮度），逻辑按 `Live2DHologramController.Update` 逐帧重现；
+  "hologram" 同时把 bundle 里的特效 prefab 挂到角色的模型视图下（随角色移动、缩放；角色退场淡出结束时隐藏，再次登场时重新播放）；"none" 移除。
+  扫描线贴图 `holo.png` 由 `tools/ui-kit/extract.py` 从客户端导出。参数表 v5。
+  **像素影响**：使用全息效果的剧集（如日服活动 217 第 3、4、7 话）中，对应角色显示为全息投影并带粒子特效；此前按普通角色绘制。
+  Character shader "hologram" / "monitor" is rendered (material, flicker, attached particle prefab).
+
+### 修复 / Fixed
+
+- **对话框文字描边宽度**：描边层（`WordsOutline` / `NameOutline`，shader `Sekai/TextMeshPro/Mobile/Distance Field`）
+  的外扩量按客户端 shader 代码与材质参数计算：`(_FaceDilate 0.5 + _OutlineWidth 0.5) × ratioA / 2` 个 SDF 单位，
+  1 SDF 单位 = 12 个图集像素（由游戏自带的 SDF 图集实测），即 4.21 × 字号 / 35 像素。此前只计入了 `_FaceDilate`，
+  且用的是拟合值，描边只有游戏的约 40%。描边改用精确的欧氏距离变换生成。
+  **像素影响**：CN 与 JP 所有对话框文字、名字的描边变宽（44 号字 1080p 下约 2.3 px → 5.8 px），与游戏录像对照一致。
+  Talk window text outlines now follow the client's shader: about 2.5× wider than before.
+- **ShakeWindow（特效 6 / 26）只抖文字**：`TalkWindow.windowRectTransform` 在 prefab 里指向
+  `Window/ContentRoot/Content/Text`，其下只有名字与正文（及其描边层）。此前把对话框底板、名字横条和 AUTO 标签也一起抖了。
+  **像素影响**：ShakeWindow 期间对话框底板、名字横条、AUTO 标签保持不动。
+  ShakeWindow now moves only the name and words, as the prefab does.
+- **Layout 附带的动作与表情**：`SnippetActionCharacterLayout` 在按类型分支之前，先对任意类型执行 `MotionName`（换身体动作）与 `FacialName`（换表情）。
+  此前只在出场（Type 2）时使用，移动（1）、退场（3）、层级调整（6）所带的动作与表情都被丢弃，角色在这些时刻僵住不动。IR v3：`Layout.motion` / `Layout.facial`。
+  **像素影响**：几乎所有剧集中，移动、退场、层级调整时的动作与表情现在会播放（本地日服每话 7–43 处）；节奏不变（CN 第一章 440.6 s、日服 217 第 3 话 697.2 s 均不变）。
+  Layout snippets of every type now apply their motion and facial, as the game does before branching on the type.
+
 ## 0.1.0（2026-09-25）
 
 首个公开版本。把 SekaiStoryRipper 导出的剧情（CN 6.4.0 / JP 6.8.1）渲染成与游戏一致的自动播放视频。

@@ -11,7 +11,7 @@
 ## 决策
 
 - 开源代码，**不分发任何游戏资产**。缺资产时明确报错，并列出缺失清单，不静默降级。
-- CDN 资源：sse **只读取 SekaiStoryRipper 的输出**（`library/` + `episodes/`），自身不含下载或解密代码，也不接触密钥。
+- CDN 资源：sse **只读取 SekaiStoryRipper 的输出**（`library/` + `episodes/`），自身不含游戏 CDN 下载或解密代码，也不接触密钥。Ripper 的输出可以在本地目录，也可以在 S3（ADR-0015）。
 - 格式类型来自 `ripper-format`，以 git 依赖固定到某个 tag；sse 拒绝未知的 `format` 或 `version`。升级 tag 是一次显式变更，要写进 CHANGELOG。
 - 客户端内置资源：由用户用 [`tools/ui-kit/extract.py`](../../tools/ui-kit/extract.py) 从自己的客户端（`.ipa`、`.app`、`Data` 目录或 `data.unity3d`）导出成 UI 套件，通过 `--ui` 传入。套件包括对话框相关 sprite、转场贴图、客户端字体，以及转场粒子参数（`fx_transition_scenario.json`，`sse-fx` v1）。
 - 套件中缺少某个文件时，只是不画对应的元素，并写入导出报告。
