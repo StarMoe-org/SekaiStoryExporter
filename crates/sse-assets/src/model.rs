@@ -28,7 +28,31 @@ struct Refs {
     physics: Option<String>,
 }
 
+/// The bundle's `BuildModelData` MonoBehaviour: what the game itself loads. A bundle may carry
+/// more than one model (e.g. JP `sub_asahi` holds `sub_troupemember_t04` and `_t05`); this names
+/// the one in use.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct BuildModelData {
+    moc3_file_name: String,
+    #[serde(default)]
+    physics_file_name: String,
+    #[serde(default)]
+    texture_names: Vec<String>,
+}
+
 pub(crate) fn load(dir: &Path) -> Result<Model3> {
+    let build = dir.join("buildmodeldata.json");
+    if build.is_file() {
+        let b: BuildModelData = crate::read_json(&build)?;
+        let moc = b.moc3_file_name.strip_suffix(".bytes").unwrap_or(&b.moc3_file_name);
+        return Ok(Model3 {
+            dir: dir.to_owned(),
+            moc: dir.join(moc),
+            textures: b.texture_names.iter().map(|t| dir.join(t)).collect(),
+            physics: (!b.physics_file_name.is_empty()).then(|| dir.join(&b.physics_file_name)),
+        });
+    }
     let entries = sse_core::fs::read_dir_sorted(dir).map_err(|source| AssetError::Io {
         path: dir.to_owned(),
         source,

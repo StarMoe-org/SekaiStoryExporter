@@ -409,6 +409,15 @@ impl<'a> Scheduler<'a> {
             frame += 1;
             if frame > MAX_FRAMES {
                 let at = self.instrs.get(seq).map_or(u32::MAX, |i| i.index);
+                if std::env::var_os("SSE_DEBUG_STUCK").is_some() {
+                    for t in &self.running {
+                        eprintln!("running snippet {} started {} wait {:?}", t.index, t.started, t.wait);
+                    }
+                    for (id, c) in &self.chars {
+                        eprintln!("char {id:?} shown {} body {:?} pending {:?}", c.shown, c.body, c.pending);
+                    }
+                    eprintln!("busy {:?} window_open {}", self.busy, self.window_open);
+                }
                 return Err(TimelineError::Stuck(MAX_FRAMES, at));
             }
         }
@@ -456,12 +465,16 @@ impl<'a> Scheduler<'a> {
 
     /// Resumes running task `k`. Returns true when it finished this frame.
     fn resume(&mut self, k: usize, frame: u32) -> bool {
+        // The slot keeps the task's own index and position while it runs, so checks over
+        // `running` (the talk gate's "is a layout snippet running") see it as itself and skip
+        // it, instead of seeing a stand-in for snippet 0.
+        let (index, pos) = (self.running[k].index, self.running[k].pos);
         let mut task = std::mem::replace(
             &mut self.running[k],
             Task {
-                index: 0,
+                index,
                 started: 0,
-                pos: 0,
+                pos,
                 wait: Wait::Delay { until: 0 },
             },
         );
@@ -541,7 +554,8 @@ impl<'a> Scheduler<'a> {
                         until: frame + self.tb.frames_for(consts::AUTO_NEXT_PAGE_DELAY),
                     },
                     Some(voice) => {
-                        let voice_end = timing.act + self.tb.frames_for(voice);
+                        // `OnFinishVoice` fires on the frame CRI reports Removed
+                        let voice_end = timing.act + self.tb.frames_for(voice + consts::VOICE_END_LATENCY);
                         if frame >= voice_end {
                             TalkStage::Gate {
                                 wait: consts::AUTO_NEXT_PAGE_DELAY,
@@ -758,7 +772,7 @@ impl<'a> Scheduler<'a> {
         t += self.fst_slots * per_slot;
         let text_end = t;
         // do { t += dt; if (t >= 10) break; yield; } while (!isVoiceFinish)
-        let voice_end = voice.map(|a| text_start + tb.frames_for(self.durations.of(a)));
+        let voice_end = voice.map(|a| text_start + tb.frames_for(self.durations.of(a) + consts::VOICE_END_LATENCY));
         t = match voice_end {
             Some(v) if v > t + 1 => v.min(t + tb.frames_for(consts::FST_VOICE_TIMEOUT)),
             _ => t + 1,

@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PARAM_TABLE_VERSION: u32 = 3;
+pub const PARAM_TABLE_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamTable {
@@ -48,6 +48,32 @@ pub struct FrameState {
     pub movie: Option<MovieState>,
     /// `fx_transition_scenario` instance (`SnippetActionSpecialEffect` cases 21 / 41).
     pub fx: Option<FxState>,
+    /// ShakeScreen offset of `ScenarioRoot`, reference-canvas pixels, +y up.
+    #[serde(default)]
+    pub scenario_shake: [f32; 2],
+    /// ShakeWindow offset of the talk window, reference-canvas pixels, +y up.
+    #[serde(default)]
+    pub window_shake: [f32; 2],
+    /// Scenario effect prefabs (`PlayScenarioEffect`) alive this frame, oldest first.
+    #[serde(default)]
+    pub effects: Vec<EffectState>,
+    /// `ScenarioSideFadePlayer` while active: its `anchoredPosition` (reference-canvas pixels,
+    /// +y up; zero = covering the screen).
+    #[serde(default)]
+    pub side_fade: Option<[f32; 2]>,
+}
+
+/// One `PlayScenarioEffect` instance: the prefab `name` from `bundle`, instantiated
+/// `age_frames` ago; `stop_age` = age at which `StopScenarioEffect` stopped it. The renderer
+/// re-simulates (or steps its cached copy) up to `age_frames`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffectState {
+    pub bundle: String,
+    pub name: String,
+    pub age_frames: u32,
+    pub stop_age: Option<u32>,
+    /// Instance identity and random seed (the instantiation frame).
+    pub seed: u32,
 }
 
 /// One live `fx_transition_scenario` copy. The prefab hangs off `ScenarioPlayer.effectLayer`

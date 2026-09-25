@@ -42,6 +42,15 @@ impl Font {
         Ok(Self { font })
     }
 
+    /// TMP's preferred width of a single line (`CalculatePreferredValues`): the advances at
+    /// em size `size`, each character but the last followed by `spacing × size × 0.01`.
+    pub fn preferred_width(&self, text: &str, size: f32, spacing: f32) -> f32 {
+        let sf = self.font.as_scaled(self.em(size));
+        let n = text.chars().count();
+        let advances: f32 = text.chars().map(|c| sf.h_advance(self.font.glyph_id(c))).sum();
+        advances + spacing * size * 0.01 * n.saturating_sub(1) as f32
+    }
+
     /// `ab_glyph`'s `PxScale` is the pixel height of ascent − descent, while TMP's font size
     /// is the em. Converts an em size in pixels to the matching `PxScale`.
     fn em(&self, em_px: f32) -> PxScale {

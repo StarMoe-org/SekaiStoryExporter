@@ -109,6 +109,10 @@ pub const AUTO_NEXT_PAGE_DELAY: f32 = 2.0;
 pub const AUTO_WAIT_AFTER_VOICE: f32 = 0.5;
 /// `talk.auto_voice_timeout`.
 pub const AUTO_VOICE_TIMEOUT: f32 = 30.0;
+/// `sound.voice_end_latency`: a voice counts as finished when `CriAtomExPlayback.GetStatus()`
+/// reaches Removed; with Sonic Sync on (`CriWareInitializer.atomConfig.iosEnableSonicSync`)
+/// that trails the last mixed sample by the output buffer, `iosBufferingTime` = 50 ms.
+pub const VOICE_END_LATENCY: f32 = 0.05;
 
 /// `ScenarioFullScreenTextDialog.playDuration` (static, `.cctor` 0x169DB80): cinemascope
 /// tween, hold after the voice, and `FadeOutAll` duration.
@@ -232,6 +236,7 @@ mod tests {
         check("talk.auto_next_page_delay", AUTO_NEXT_PAGE_DELAY);
         check("talk.auto_wait_after_voice", AUTO_WAIT_AFTER_VOICE);
         check("talk.auto_voice_timeout", AUTO_VOICE_TIMEOUT);
+        check("sound.voice_end_latency", VOICE_END_LATENCY);
         check("talk.window_fade_duration", TALK_WINDOW_FADE_DURATION);
         check("talk.line_advance_px", TALK_LINE_ADVANCE_PX);
         check("sound.default_bgm_fade", DEFAULT_BGM_FADE);

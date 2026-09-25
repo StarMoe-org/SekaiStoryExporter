@@ -35,16 +35,26 @@ pub struct Image {
 pub struct QuadDraw {
     image: Option<ImageId>,
     rect: [f32; 4],
+    /// u0, v0, u1, v1 (top-down image rows); swapped ends mirror.
+    uv: [f32; 4],
     color: [f32; 4],
     premultiplied: bool,
 }
 
 impl QuadDraw {
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        self.rect[0] += dx;
+        self.rect[1] += dy;
+    }
+
     pub fn image(id: ImageId, rect: [f32; 4], color: [f32; 4]) -> Self {
-        Self { image: Some(id), rect, color, premultiplied: false }
+        Self { image: Some(id), rect, uv: [0.0, 0.0, 1.0, 1.0], color, premultiplied: false }
+    }
+    pub fn image_uv(id: ImageId, rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) -> Self {
+        Self { image: Some(id), rect, uv, color, premultiplied: false }
     }
     pub fn solid(rect: [f32; 4], color: [f32; 4]) -> Self {
-        Self { image: None, rect, color, premultiplied: false }
+        Self { image: None, rect, uv: [0.0, 0.0, 1.0, 1.0], color, premultiplied: false }
     }
 }
 
@@ -86,6 +96,12 @@ pub struct FramePlan {
     /// Dialog layer (full-screen text): above the fader.
     pub ui_top: Vec<QuadDraw>,
     pub text: Option<ImageId>,
+    /// `SideFadePlayer`: last sibling of `UILayer`, drawn over the talk window and its text.
+    pub cover: Vec<QuadDraw>,
+    /// Scenario effect prefabs below the characters' canvas (sorting order < 220) and above
+    /// it; both are drawn by the scenario camera, so before its post effects.
+    pub effects_back: Vec<ParticleDraw>,
+    pub effects_front: Vec<ParticleDraw>,
 }
 
 #[repr(C)]
@@ -583,7 +599,7 @@ impl Gpu {
                     img,
                     QuadGpu {
                         rect: q.rect,
-                        uv: [0.0, 0.0, 1.0, 1.0],
+                        uv: q.uv,
                         color: q.color,
                         target: [w, h, if q.premultiplied { 1.0 } else { 0.0 }, 0.0],
                     },
@@ -595,6 +611,11 @@ impl Gpu {
     /// Draws billboards in order, switching blend per draw (Unity renders them in sorting
     /// order; one draw per billboard keeps the additive / alpha interleaving exact).
     fn particles(&mut self, enc: &mut wgpu::CommandEncoder, draws: &[ParticleDraw]) {
+        let out_view = self.output_view.clone();
+        self.particles_to(enc, &out_view, draws);
+    }
+
+    fn particles_to(&mut self, enc: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, draws: &[ParticleDraw]) {
         use wgpu::util::DeviceExt;
         if draws.is_empty() {
             return;
@@ -614,8 +635,7 @@ impl Gpu {
         });
         let q = QuadGpu { rect: [0.0; 4], uv: [0.0; 4], color: [1.0; 4], target: [w, h, 0.0, 0.0] };
         let bgs: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.quad_bind(d.image, q)).collect();
-        let out_view = self.output_view.clone();
-        let mut rp = Self::pass(enc, &out_view, None);
+        let mut rp = Self::pass(enc, target, None);
         rp.set_vertex_buffer(0, vbuf.slice(..));
         for (i, d) in draws.iter().enumerate() {
             rp.set_pipeline(&self.particle_pipes[if d.additive { 0 } else { 1 }]);
@@ -779,6 +799,12 @@ impl Gpu {
         let mut enc = self.device.create_command_encoder(&Default::default());
         self.draw_quads(&mut enc, &self.scene.view, &bgs, black);
         self.queue.submit([enc.finish()]);
+        if !plan.effects_back.is_empty() {
+            let mut enc = self.device.create_command_encoder(&Default::default());
+            let scene_view = self.scene.view.clone();
+            self.particles_to(&mut enc, &scene_view, &plan.effects_back);
+            self.queue.submit([enc.finish()]);
+        }
 
         // characters: RT then composite, one submission each (shared RT / position writes)
         for c in &plan.characters {
@@ -793,6 +819,12 @@ impl Gpu {
             };
             let bg = self.view_bind(&rt_view, bytemuck::bytes_of(&q));
             self.draw_quads(&mut enc, &self.scene.view, &[bg], None);
+            self.queue.submit([enc.finish()]);
+        }
+        if !plan.effects_front.is_empty() {
+            let mut enc = self.device.create_command_encoder(&Default::default());
+            let scene_view = self.scene.view.clone();
+            self.particles_to(&mut enc, &scene_view, &plan.effects_front);
             self.queue.submit([enc.finish()]);
         }
 
@@ -848,8 +880,9 @@ impl Gpu {
         ui.extend(self.quads(&plan.overlay));
         ui.extend(self.quads(&plan.ui_top));
         if let Some(t) = plan.text {
-            ui.extend(self.quads(&[QuadDraw { image: Some(t), rect: [0.0, 0.0, w, h], color: [1.0; 4], premultiplied: true }]));
+            ui.extend(self.quads(&[QuadDraw { image: Some(t), rect: [0.0, 0.0, w, h], uv: [0.0, 0.0, 1.0, 1.0], color: [1.0; 4], premultiplied: true }]));
         }
+        ui.extend(self.quads(&plan.cover));
         let out_view = self.output_view.clone();
         self.draw_quads(&mut enc, &out_view, &ui, None);
 

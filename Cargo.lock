@@ -1219,8 +1219,10 @@ name = "sse-render"
 version = "0.0.0"
 dependencies = [
  "bytemuck",
+ "crc32fast",
  "image",
  "pollster",
+ "serde_json",
  "sse-assets",
  "sse-core",
  "sse-live2d",

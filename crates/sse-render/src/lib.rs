@@ -20,11 +20,13 @@
 //! - Masks are per-drawable at RT resolution, not the game's shared 1024² × 4 atlas
 //! - Hardware bilinear sampling (determinism R-8 asks for manual bilinear)
 
+mod effect;
 mod fx;
 mod fx_data;
 mod gpu;
 mod movie;
 mod native_ui;
+mod particle;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -81,6 +83,10 @@ impl RenderConfig {
     }
 }
 
+/// `ScenarioLayer` (the characters) canvas sorting order (`rendering.md` §1): effects sorted
+/// below it are drawn before the characters.
+const SCENARIO_LAYER_ORDER: i32 = 220;
+
 pub struct Renderer {
     gpu: gpu::Gpu,
     cfg: RenderConfig,
@@ -99,6 +105,13 @@ pub struct Renderer {
     fps: u32,
     /// `tex_common_tri_01` (the transition triangles' 4×4 atlas), from the `--ui` dir.
     fx_atlas: Option<gpu::Image>,
+    /// `tex_transition_top` / `tex_transition_left` (the side fade's feathered edges).
+    side_edges: Option<(gpu::Image, gpu::Image)>,
+    /// Scenario effect prefabs by (bundle, name); `None` when loading failed.
+    prefabs: BTreeMap<(String, String), Option<std::sync::Arc<effect::Prefab>>>,
+    /// Live instances by (bundle, name, seed): the instance and its age in frames.
+    effects: BTreeMap<(String, String, u32), (effect::EffectInstance, u32)>,
+    white: gpu::Image,
 }
 
 impl Renderer {
@@ -123,11 +136,15 @@ impl Renderer {
         let native = native_ui::NativeUi::load(&mut gpu, &ui.sprites);
         let movie_image = gpu.image(&image::RgbaImage::new(cfg.width, cfg.height));
         let fx_atlas = sse_assets::load_png(&ui.sprites.join("tex_common_tri_01.png")).ok().map(|i| gpu.image(&i));
+        let edge = |n: &str| sse_assets::load_png(&ui.sprites.join(n)).ok();
+        let side_edges = match (edge("tex_transition_top.png"), edge("tex_transition_left.png")) {
+            (Some(t), Some(l)) => Some((gpu.image(&t), gpu.image(&l))),
+            _ => None,
+        };
         let font = |p: &PathBuf| sse_text::Font::load(p).map_err(|e| RenderError::Other(e.to_string()));
         Ok(Self {
             body_font: font(&ui.font_body)?,
             name_font: font(&ui.font_name)?,
-            gpu,
             cfg,
             models,
             images: BTreeMap::new(),
@@ -141,6 +158,11 @@ impl Renderer {
             lib: lib.clone(),
             fps: table.fps,
             fx_atlas,
+            side_edges,
+            prefabs: BTreeMap::new(),
+            effects: BTreeMap::new(),
+            white: gpu.image(&image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]))),
+            gpu,
         })
     }
 
@@ -207,6 +229,22 @@ impl Renderer {
             });
         }
 
+        // ShakeScreen moves `ScenarioRoot` (background, characters) in canvas pixels, +y up
+        let [sx, sy] = frame.scenario_shake;
+        if sx != 0.0 || sy != 0.0 {
+            let (ox, oy) = (sx * k, -sy * k);
+            for q in &mut plan.scene {
+                q.translate(ox, oy);
+            }
+            for c in &mut plan.characters {
+                c.rect[0] += ox;
+                c.rect[1] += oy;
+            }
+        }
+
+        // `PlayScenarioEffect` prefabs (EffectLayer), in canvas pixels → target pixels
+        self.scenario_effects(frame, &mut plan, content, k, [w, h])?;
+
         // EffectLayer: `fx_transition_scenario`, re-simulated from its instantiation
         if let (Some(fx), Some(atlas)) = (&frame.fx, &self.fx_atlas) {
             let mut sim = fx::TransitionFx::new(fx.seed);
@@ -252,7 +290,14 @@ impl Renderer {
         }
         if let Some(t) = &frame.talk {
             if self.native.has_window() {
-                self.native.talk(&mut plan.ui, k, t.window_alpha, t.auto_time);
+                let first = plan.ui.len();
+                let auto_w = self.name_font.preferred_width("AUTO", native_ui::layout::AUTO_TEXT_SIZE, native_ui::layout::AUTO_TEXT_SPACING);
+                self.native.talk(&mut plan.ui, k, t.window_alpha, t.auto_time, auto_w);
+                // ShakeWindow moves `windowRectTransform` (the window, name and words)
+                let [wx, wy] = frame.window_shake;
+                for q in &mut plan.ui[first..] {
+                    q.translate(wx * k, -wy * k);
+                }
             } else if let Some(img) = &self.dialog_overlay {
                 plan.ui.push(gpu::QuadDraw::image(img.id, [0.0, 0.0, w, h], [1.0, 1.0, 1.0, t.window_alpha]));
             }
@@ -266,15 +311,135 @@ impl Renderer {
             self.native.place_info(&mut plan.ui, k, p.x);
         }
         plan.text = Some(self.text_canvas(frame, k, telop_text)?);
+        if let Some(p) = frame.side_fade {
+            self.side_fade(&mut plan.cover, k, content, p);
+        }
 
         Ok(self.gpu.render(&mut self.models, &plan)?)
+    }
+
+    /// Steps (or rebuilds) every live scenario effect to its age and plans its quads.
+    fn scenario_effects(
+        &mut self,
+        frame: &FrameState,
+        plan: &mut gpu::FramePlan,
+        content: [f32; 2],
+        k: f32,
+        screen: [f32; 2],
+    ) -> Result<(), RenderError> {
+        let dt = 1.0 / self.fps as f32;
+        let mut keep = std::collections::BTreeSet::new();
+        for e in &frame.effects {
+            let pk = (e.bundle.clone(), e.name.clone());
+            if !self.prefabs.contains_key(&pk) {
+                let p = effect::Prefab::load(&self.lib, &e.bundle, &e.name).ok().map(std::sync::Arc::new);
+                self.prefabs.insert(pk.clone(), p);
+            }
+            let Some(prefab) = self.prefabs[&pk].clone() else { continue };
+            let key = (e.bundle.clone(), e.name.clone(), e.seed);
+            keep.insert(key.clone());
+            let stale = self.effects.get(&key).is_none_or(|(_, age)| *age > e.age_frames);
+            if stale {
+                self.effects.insert(key.clone(), (effect::EffectInstance::new(prefab, e.seed, dt), 0));
+            }
+            let (inst, age) = self.effects.get_mut(&key).expect("inserted");
+            if e.stop_age == Some(*age) {
+                inst.stop();
+            }
+            while *age < e.age_frames {
+                inst.step();
+                *age += 1;
+                if e.stop_age == Some(*age) {
+                    inst.stop();
+                }
+            }
+        }
+        self.effects.retain(|k, _| keep.contains(k));
+        let [sx, sy] = frame.scenario_shake;
+        let to_screen = |p: [f32; 2]| [screen[0] * 0.5 + (p[0] + sx) * k, screen[1] * 0.5 - (p[1] + sy) * k];
+        let quads: Vec<effect::EffectQuad> = self.effects.values().flat_map(|(inst, _)| inst.quads(content)).collect();
+        if std::env::var_os("SSE_DEBUG_EFFECTS").is_some() {
+            for ((b, n, s), (inst, age)) in &self.effects {
+                let q = inst.quads(content);
+                eprintln!("effect {b} {n} seed {s} age {age} finished {} quads {}", inst.finished, q.len());
+                for x in q.iter().take(4) {
+                    eprintln!("   order {} corners {:?} color {:?} tex {:?}", x.order, x.corners, x.color, x.tex);
+                }
+            }
+        }
+        for q in quads {
+            let image = match &q.tex {
+                Some(t) => self.image(t)?,
+                None => self.white.id,
+            };
+            // `EffectQuad` UVs are image-space (v down); ParticleDraw takes per-corner UVs
+            let [u0, v0, u1, v1] = q.uv;
+            let d = gpu::ParticleDraw {
+                additive: q.blend == effect::Blend::Additive,
+                image,
+                corners: q.corners.map(to_screen),
+                uvs: [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+                color: q.color,
+            };
+            if q.order < SCENARIO_LAYER_ORDER {
+                plan.effects_back.push(d);
+            } else {
+                plan.effects_front.push(d);
+            }
+        }
+        Ok(())
+    }
+
+    /// `SideFadePlayer` prefab (JP 6.8.1 `resources.assets|121155`): the root stretches over the
+    /// canvas with sizeDelta 64×64 and is a black `AtlasImage`; four 512-px `CustomImage`
+    /// children in Tiled mode sit outside its edges — `top` (anchors top, pivot (0,0)) and
+    /// `bottom` (its y-mirror) with `tex_transition_top`, `left` (anchors left, pivot (1,0)) and
+    /// `right` (its x-mirror) with `tex_transition_left`. Sprite PPU 1 on a reference-PPU-1
+    /// canvas → 512-px tiles; UGUI's tiled path maps each tile onto the sprite's `textureRect`
+    /// (top: Unity y 0–384 of 512 → image rows 128–512; left: x 128–512), starting at the
+    /// rect's minimum corner. `p` is the root's anchoredPosition (+y up).
+    fn side_fade(&self, out: &mut Vec<gpu::QuadDraw>, k: f32, content: [f32; 2], p: [f32; 2]) {
+        const EDGE: f32 = 512.0;
+        const TRIM: f32 = 128.0 / 512.0;
+        let [cw, ch] = content;
+        // root rect in canvas pixels, top-left origin
+        let (x0, y0, rw, rh) = (-32.0 + p[0], -32.0 - p[1], cw + 64.0, ch + 64.0);
+        let px = |r: [f32; 4]| [r[0] * k, r[1] * k, r[2] * k, r[3] * k];
+        out.push(gpu::QuadDraw::solid(px([x0, y0, rw, rh]), [0.0, 0.0, 0.0, 1.0]));
+        let Some((top, left)) = &self.side_edges else { return };
+        // horizontal strips: tiles run left → right from x0
+        let mut x = 0.0;
+        while x < rw {
+            let tw = (rw - x).min(EDGE);
+            let u1 = tw / EDGE;
+            // top: dense rows (image bottom) against the panel
+            out.push(gpu::QuadDraw::image_uv(top.id, px([x0 + x, y0 - EDGE, tw, EDGE]), [0.0, TRIM, u1, 1.0], [1.0; 4]));
+            // bottom: y-mirror
+            out.push(gpu::QuadDraw::image_uv(top.id, px([x0 + x, y0 + rh, tw, EDGE]), [0.0, 1.0, u1, TRIM], [1.0; 4]));
+            x += EDGE;
+        }
+        // vertical strips: tiles run bottom → top (Unity y) from the root's bottom
+        let mut y = 0.0;
+        while y < rh {
+            let th = (rh - y).min(EDGE);
+            let v0 = 1.0 - th / EDGE;
+            let ty = y0 + rh - y - th;
+            // left: dense columns (image right) against the panel
+            out.push(gpu::QuadDraw::image_uv(left.id, px([x0 - EDGE, ty, EDGE, th]), [TRIM, v0, 1.0, 1.0], [1.0; 4]));
+            // right: x-mirror
+            out.push(gpu::QuadDraw::image_uv(left.id, px([x0 + rw, ty, EDGE, th]), [1.0, v0, TRIM, 1.0], [1.0; 4]));
+            y += EDGE;
+        }
     }
 
     /// Rasterises all text of the frame; re-uploads only when it changed.
     fn text_canvas(&mut self, frame: &FrameState, k: f32, telop: Option<(f32, f32)>) -> Result<gpu::ImageId, RenderError> {
         let key = format!(
             "{:?}|{:?}|{:?}|{:?}|{}",
-            frame.talk.as_ref().map(|t| (&t.name, &t.body, t.visible, (t.window_alpha * 255.0) as u8)),
+            frame.talk.as_ref().map(|t| {
+                let s = frame.window_shake;
+                (&t.name, &t.body, t.visible, (t.window_alpha * 255.0) as u8, (s[0] * 4.0) as i32, (s[1] * 4.0) as i32)
+            }),
             frame.telop.as_ref().map(|b| (&b.text, telop.map(|(x, a)| ((x * 4.0) as i32, (a * 255.0) as u8)))),
             frame.place_info.as_ref().map(|b| (&b.text, (b.x * 4.0) as i32)),
             frame.full_screen_text.as_ref().map(|b| (&b.text, (b.progress * 64.0) as u32, (b.alpha * 255.0) as u8)),
@@ -320,8 +485,10 @@ impl Renderer {
         let rect = |r: [f32; 4], align: f32, valign: f32| frame_at(r[0], r[1], r[2], r[3], align, valign);
         if let Some(t) = &frame.talk {
             use native_ui::layout as l;
-            sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, rect(l::NAME, 0.0, 0.0), &name, t.window_alpha);
-            sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, rect(l::WORDS, 0.0, 0.0), &body, t.window_alpha);
+            let [wx, wy] = frame.window_shake;
+            let shaken = |r: [f32; 4]| [r[0] + wx, r[1] - wy, r[2], r[3]];
+            sse_text::draw(&mut canvas, &self.name_font, &t.name, u32::MAX, rect(shaken(l::NAME), 0.0, 0.0), &name, t.window_alpha);
+            sse_text::draw(&mut canvas, &self.body_font, &t.body, t.visible, rect(shaken(l::WORDS), 0.0, 0.0), &body, t.window_alpha);
             if self.native.has_window() {
                 // `AutoSignalText`: 32, white, centre / middle, characterSpacing −4, no outline
                 let auto = sse_text::Style {
@@ -332,7 +499,8 @@ impl Renderer {
                     char_spacing: l::AUTO_TEXT_SPACING,
                     ..name
                 };
-                sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect(l::AUTO_TEXT, 0.5, 0.5), &auto, t.window_alpha);
+                let auto_w = self.name_font.preferred_width("AUTO", l::AUTO_TEXT_SIZE, l::AUTO_TEXT_SPACING);
+                sse_text::draw(&mut canvas, &self.name_font, "AUTO", u32::MAX, rect(shaken(l::auto_text(auto_w)), 0.5, 0.5), &auto, t.window_alpha);
             }
         }
         let plain = sse_text::Style { auto_size: false, outline: None, ..body };
@@ -384,7 +552,7 @@ impl Renderer {
     pub fn notes() -> Vec<String> {
         vec![
             "masks rendered per drawable at RT resolution (game: shared 1024² × 4 atlas)".into(),
-            "text rasterised from Source Han Sans (not TMP SDF); boxes, sizes and underlay from the prefabs, TMP line breaking approximated".into(),
+            "text rasterised from the --ui font (CN Source Han Sans SC, JP FOT-RodinNTLG Pro; not TMP SDF); boxes, sizes and underlay from the prefabs, TMP line breaking approximated".into(),
             "scenario UI rebuilt from the prefabs (talk-window sprites user-supplied)".into(),
         ]
     }

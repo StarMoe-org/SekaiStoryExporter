@@ -32,20 +32,26 @@ pub mod layout {
     pub const AUTO_BG_COLOR: [f32; 4] = [0.266_666_68, 0.266_666_68, 0.4, 0.8];
     /// `AutoSignalText` `characterSpacing`.
     pub const AUTO_TEXT_SPACING: f32 = -4.0;
-    /// TMP preferred width of "AUTO" (`CalculatePreferredValues`: every advance but the last
-    /// gains `−4 × 32 × 0.01`): `FOT-RodinNTLGPro-EB-OnDemand` advances A 22.4375, U 26.1875,
-    /// T 21.875, O 26.953125 at point size 35, scaled by 32/35, no kerning pairs, spacing
-    /// offset 0. (The prefab's serialized 73.82 is a stale layout result.)
-    pub const AUTO_TEXT_WIDTH: f32 = 85.26;
+    /// `AutoSignalText` font size.
+    pub const AUTO_TEXT_SIZE: f32 = 32.0;
     /// `AutoSignal`'s `HorizontalLayoutGroup` (MiddleCenter, spacing 6, controls child size):
     /// `icon` (its own group holds only `AutoSignalIcon1` in auto mode — `ActiveAutoObject`
-    /// disables icon 2 — so 28 wide) + 6 + `signalText` (the text's preferred width),
-    /// centred in the 200-wide signal.
-    const AUTO_ROW_X: f32 = AUTO[0] + (AUTO[2] - (28.0 + 6.0 + AUTO_TEXT_WIDTH)) * 0.5;
+    /// disables icon 2 — so 28 wide) + 6 + `signalText` at the text's TMP preferred width
+    /// (`Font::preferred_width`; the prefab's serialized 73.82 is a stale layout result),
+    /// centred in the 200-wide signal. With CN 6.4.0's EB OnDemand advances (A 22.4375,
+    /// U 26.1875, T 21.875, O 26.953125 at 35 pt) the width is 85.26; JP's real Rodin EB is
+    /// wider, so the row is laid out from the loaded font.
+    fn auto_row_x(text_w: f32) -> f32 {
+        AUTO[0] + (AUTO[2] - (28.0 + 6.0 + text_w)) * 0.5
+    }
     /// `AutoSignalIcon1` (28×22, rotated −90° about its centre): centre (row x + 14, 1032).
-    pub const AUTO_ICON: [f32; 4] = [AUTO_ROW_X + 14.0 - 11.0, 1018.0, 22.0, 28.0];
+    pub fn auto_icon(text_w: f32) -> [f32; 4] {
+        [auto_row_x(text_w) + 14.0 - 11.0, 1018.0, 22.0, 28.0]
+    }
     /// `AutoSignalText`, sized to its preferred width.
-    pub const AUTO_TEXT: [f32; 4] = [AUTO_ROW_X + 34.0, 1016.0, AUTO_TEXT_WIDTH, 32.0];
+    pub fn auto_text(text_w: f32) -> [f32; 4] {
+        [auto_row_x(text_w) + 34.0, 1016.0, text_w, 32.0]
+    }
     /// `TweenAlpha` on the icon: visible for the first 0.5028 s of each 1 s loop.
     pub const AUTO_ICON_ON: f32 = 0.502_762_44;
     /// `UIPartsMenuButton`: 96×96 centred at top-right − (64, 64).
@@ -130,7 +136,7 @@ impl NativeUi {
 
     /// Talk window background, name bar and auto signal. `auto_time` is the seconds since
     /// the auto signal was enabled (drives the icon blink).
-    pub fn talk(&self, out: &mut Vec<QuadDraw>, k: f32, alpha: f32, auto_time: f32) {
+    pub fn talk(&self, out: &mut Vec<QuadDraw>, k: f32, alpha: f32, auto_time: f32, auto_text_w: f32) {
         let r = |a: [f32; 4]| [a[0] * k, a[1] * k, a[2] * k, a[3] * k];
         let with = |c: [f32; 4], a: f32| [c[0], c[1], c[2], c[3] * a];
         if let Some(w) = &self.window {
@@ -145,7 +151,7 @@ impl NativeUi {
         if let Some(i) = &self.auto_icon
             && auto_time.rem_euclid(1.0) < layout::AUTO_ICON_ON
         {
-            out.push(QuadDraw::image(i.id, r(layout::AUTO_ICON), [1.0, 1.0, 1.0, alpha]));
+            out.push(QuadDraw::image(i.id, r(layout::auto_icon(auto_text_w)), [1.0, 1.0, 1.0, alpha]));
         }
     }
 
