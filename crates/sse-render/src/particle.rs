@@ -193,6 +193,8 @@ pub enum ColorSpec {
     Gradient(Gradient),
     TwoColors([f32; 4], [f32; 4]),
     TwoGradients(Gradient, Gradient),
+    /// `ParticleSystemGradientMode.RandomColor`: the gradient at a random point.
+    RandomColor(Gradient),
 }
 
 fn rgba(v: &Value) -> [f32; 4] {
@@ -202,7 +204,8 @@ fn rgba(v: &Value) -> [f32; 4] {
 impl ColorSpec {
     fn parse(v: &Value) -> Self {
         match v["minMaxState"].as_i64().unwrap_or(0) {
-            1 | 4 => ColorSpec::Gradient(Gradient::parse(&v["maxGradient"])),
+            1 => ColorSpec::Gradient(Gradient::parse(&v["maxGradient"])),
+            4 => ColorSpec::RandomColor(Gradient::parse(&v["maxGradient"])),
             2 => ColorSpec::TwoColors(rgba(&v["minColor"]), rgba(&v["maxColor"])),
             3 => ColorSpec::TwoGradients(
                 Gradient::parse(&v["minGradient"]),
@@ -225,6 +228,7 @@ impl ColorSpec {
             ColorSpec::Gradient(g) => g.at(t),
             ColorSpec::TwoColors(a, b) => mix(*a, *b),
             ColorSpec::TwoGradients(a, b) => mix(a.at(t), b.at(t)),
+            ColorSpec::RandomColor(g) => g.at(rnd),
         }
     }
 }
@@ -571,9 +575,11 @@ impl SystemState {
         // rate over time, sampled at the loop's normalized time
         let rate = def.rate.eval(unit(&mut self.rng), in_loop / dur);
         self.emit_acc += rate * dt;
+        // the main module's curves and gradients are sampled at the system's normalized time
+        let sys_t = in_loop / dur;
         while self.emit_acc >= 1.0 {
             self.emit_acc -= 1.0;
-            self.spawn(def);
+            self.spawn(def, sys_t);
         }
         for (bi, b) in def.bursts.iter().enumerate() {
             for c in 0..b.cycles.max(1) {
@@ -587,14 +593,14 @@ impl SystemState {
                 }
                 let n = b.count.eval(unit(&mut self.rng), 0.0).round().max(0.0) as u32;
                 for _ in 0..n {
-                    self.spawn(def);
+                    self.spawn(def, sys_t);
                 }
             }
         }
         self.fired.retain(|&(l, _, _)| l + 1 >= loop_i);
     }
 
-    fn spawn(&mut self, def: &SystemDef) {
+    fn spawn(&mut self, def: &SystemDef, sys_t: f32) {
         if self.particles.len() >= def.max_particles {
             return;
         }
@@ -603,21 +609,21 @@ impl SystemState {
         for x in &mut rnd {
             *x = unit(r);
         }
-        let life = def.lifetime.eval(unit(r), 0.0).max(1e-3);
-        let speed = def.speed.eval(unit(r), 0.0);
-        let sx = def.size.eval(unit(r), 0.0);
+        let life = def.lifetime.eval(unit(r), sys_t).max(1e-3);
+        let speed = def.speed.eval(unit(r), sys_t);
+        let sx = def.size.eval(unit(r), sys_t);
         let sy = def
             .size3d
             .as_ref()
-            .map_or(sx, |(y, _)| y.eval(unit(r), 0.0));
+            .map_or(sx, |(y, _)| y.eval(unit(r), sys_t));
         let (pos, dir) = if def.shape.enabled {
             shape_sample(&def.shape, r)
         } else {
             ([0.0; 3], [0.0, 0.0, 1.0])
         };
         let vel = [dir[0] * speed, dir[1] * speed, dir[2] * speed];
-        let color = def.color.eval(unit(r), 0.0);
-        let rot = def.rotation.eval(unit(r), 0.0);
+        let color = def.color.eval(unit(r), sys_t);
+        let rot = def.rotation.eval(unit(r), sys_t);
         let seed = next_u32(r);
         self.particles.push(Particle {
             pos,
@@ -924,6 +930,22 @@ mod tests {
         assert!(!st.emitting);
         // speed 1 along +z for ~1-2 s
         assert!(st.particles.iter().all(|p| p.pos[2] > 0.9));
+    }
+
+    #[test]
+    fn random_color_samples_the_gradient_at_the_particles_random() {
+        // `hologram` prefab triangles: fixed-mode keys cyan / yellow / magenta
+        let v: Value = serde_json::from_str(
+            r#"{"minMaxState": 4, "maxGradient": {"m_Mode": 1, "m_NumColorKeys": 3, "m_NumAlphaKeys": 1,
+                "ctime0": 21588, "ctime1": 42791, "ctime2": 65535, "atime0": 0,
+                "key0": {"r": 0, "g": 1, "b": 1, "a": 1}, "key1": {"r": 1, "g": 1, "b": 0, "a": 1},
+                "key2": {"r": 1, "g": 0, "b": 1, "a": 1}}}"#,
+        )
+        .unwrap();
+        let c = ColorSpec::parse(&v);
+        assert_eq!(c.eval(0.1, 0.0)[..3], [0.0, 1.0, 1.0]);
+        assert_eq!(c.eval(0.5, 0.0)[..3], [1.0, 1.0, 0.0]);
+        assert_eq!(c.eval(0.9, 0.0)[..3], [1.0, 0.0, 1.0]);
     }
 
     #[test]

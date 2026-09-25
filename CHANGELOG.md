@@ -35,6 +35,10 @@ together with its impact.
   此前只在出场（Type 2）时使用，移动（1）、退场（3）、层级调整（6）所带的动作与表情都被丢弃，角色在这些时刻僵住不动。IR v3：`Layout.motion` / `Layout.facial`。
   **像素影响**：几乎所有剧集中，移动、退场、层级调整时的动作与表情现在会播放（本地日服每话 7–43 处）；节奏不变（CN 第一章 440.6 s、日服 217 第 3 话 697.2 s 均不变）。
   Layout snippets of every type now apply their motion and facial, as the game does before branching on the type.
+- **粒子起始颜色 RandomColor**：`MinMaxGradient` 状态 4（`RandomColor`）按每个粒子的随机数在渐变上取色，此前误当作普通渐变在 t = 0 取色，所有粒子都是第一个关键色。
+  另外，主模块中以曲线/渐变给出的起始值（寿命、速度、大小、旋转、颜色）改为按发射时刻的系统归一化时间取值（此前恒取 t = 0）。
+  **像素影响**：全息特效的三角形由单一青色变为青、黄、品红三色随机（与 prefab 数据一致）；本地日服库中其他剧情特效 prefab 不受影响。
+  Particle start colours in RandomColor mode now pick a random point on the gradient.
 
 ## 0.1.0（2026-09-25）
 
