@@ -68,6 +68,7 @@ struct Quad {
     uv: vec4<f32>,     // u0, v0, u1, v1
     color: vec4<f32>,  // vertex colour
     dst: vec4<f32>,    // target w, h, mode, _
+    extra: vec4<f32>,  // mode 2: _Line, _SubColor.a, _SubTex.r
 };
 
 @group(0) @binding(0) var<uniform> quad: Quad;
@@ -93,6 +94,19 @@ fn quad_vs(@builtin(vertex_index) vi: u32) -> QuadOut {
 fn quad_fs(i: QuadOut) -> @location(0) vec4<f32> {
     let t = textureSample(quad_tex, quad_smp, i.uv);
     let c = t * quad.color;
+    if (quad.dst.z > 1.5) {
+        // Sekai/Live2D/Live2DHologram (Live2D/Materials/Live2DHologram), blend SrcAlpha /
+        // OneMinusSrcAlpha: returned premultiplied for this pipeline's One / OneMinusSrcAlpha.
+        let lum = dot(c.rgb, vec3<f32>(0.2, 0.45, 0.35)) * c.a;
+        let inf = 0.6;
+        var rgb = lum * vec3<f32>(0.9, 1.2, 1.15) * inf + c.rgb * (1.0 - inf);
+        let scan = quad.extra.z;
+        if (quad.extra.x >= scan) {
+            rgb = rgb + vec3<f32>(scan * 0.07);
+        }
+        let a = c.a * quad.extra.y;
+        return vec4<f32>(rgb * a, a);
+    }
     if (quad.dst.z > 0.5) {
         // premultiplied source (text canvas)
         return t * quad.color.a;

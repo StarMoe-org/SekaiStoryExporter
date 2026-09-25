@@ -13,7 +13,8 @@
 |---|---|
 | `ParamTable` | `version`、`fps`（= 模拟帧率 60）、`models`（本话用到的模型 bundle）、`frames`、`audio`、`notes` |
 | `FrameState`（每帧一份，完整快照） | 背景（当前 / 上一张 + 交叉淡入权重）、角色列表（**按绘制顺序**）、`ColorFader` 颜色、模糊量、相机色调、对话框、Telop / 地点 / 全屏文字（逐字进度）、FST 黑边、菜单按钮、影片占位、转场粒子实例 |
-| `CharacterState` | 模型下标、不透明度、UI 坐标（1920×1080 参考空间，底边中点）、模式缩放、环境色、**全部 Cubism 参数的最终值**（按模型参数顺序） |
+| `CharacterState` | 模型下标、不透明度、UI 坐标（1920×1080 参考空间，底边中点）、模式缩放、环境色、**全部 Cubism 参数的最终值**（按模型参数顺序）、全息着色器参数（`hologram`：`_Line`、`_SubColor.a`、着色器时间；v5） |
+| `EffectState` | 剧情特效 prefab 实例：bundle、名字、存活帧数、停止帧、种子；`character`（v5）表示挂在该角色的模型视图下，随角色移动与缩放 |
 | `AudioCue` | 波形文件、起止帧、循环、音量、淡入淡出帧数、类别 |
 
 ## 约定

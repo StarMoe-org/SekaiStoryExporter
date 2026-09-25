@@ -12,6 +12,12 @@ together with its impact.
 
 - **S3**：`--library s3://bucket/prefix` 直接读取 SekaiStoryRipper 发布到 S3（或 MinIO、R2 等兼容服务）的 library，按 episode 只同步所需文件到本地缓存（`--cache-dir` / `SSE_CACHE_DIR`）；`-o s3://bucket/key` 渲染完成后上传视频与报告。凭据只从 `AWS_*` 环境变量读取。见 ADR-0015。无像素影响（与本地 library 逐字节相同）。
   `--library` and `-o` accept `s3://` URLs; only the files an episode needs are fetched.
+- **角色着色器（特效 22）**：`SpecialEffectChangeCharacterShader` 的 "hologram" / "monitor" 给角色的 `RawImage` 换上
+  `Live2D/Materials/Live2DHologram` 材质（单色化偏青、整体透明度 0.85–0.9 随机闪烁、扫描线亮度），逻辑按 `Live2DHologramController.Update` 逐帧重现；
+  "hologram" 同时把 bundle 里的特效 prefab 挂到角色的模型视图下（随角色移动、缩放；角色退场淡出结束时隐藏，再次登场时重新播放）；"none" 移除。
+  扫描线贴图 `holo.png` 由 `tools/ui-kit/extract.py` 从客户端导出。参数表 v5。
+  **像素影响**：使用全息效果的剧集（如日服活动 217 第 3、4、7 话）中，对应角色显示为全息投影并带粒子特效；此前按普通角色绘制。
+  Character shader "hologram" / "monitor" is rendered (material, flicker, attached particle prefab).
 
 ### 修复 / Fixed
 

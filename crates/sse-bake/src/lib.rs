@@ -9,6 +9,7 @@
 //! (`LateUpdate`), then the snapshot.
 
 mod character;
+mod hologram;
 mod lipsync;
 mod shake;
 
@@ -257,6 +258,9 @@ struct Baker<'a> {
     side_fade: Option<SideFadeRt>,
     /// `PlayScenarioEffect` instances: (bundle, name, start frame, stop frame)
     effects: Vec<(String, String, u32, Option<u32>)>,
+    /// Character shader effects (case 22) and prefabs attached to model views, by character.
+    shaders: BTreeMap<CharacterId, hologram::Controller>,
+    attached: BTreeMap<CharacterId, Vec<hologram::Attached>>,
     audio: Vec<AudioCue>,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
@@ -310,6 +314,8 @@ impl<'a> Baker<'a> {
             window_shake: None,
             side_fade: None,
             effects: Vec::new(),
+            shaders: BTreeMap::new(),
+            attached: BTreeMap::new(),
             audio: Vec::new(),
             bgm: None,
             se_loops: BTreeMap::new(),
@@ -497,9 +503,16 @@ impl<'a> Baker<'a> {
                 scale,
             ),
         };
+        let was_shown = rt.visible;
         self.chars.insert(id, rt);
         self.order.retain(|c| *c != id);
         self.order.push(id);
+        // `AppearCharacter` on a hidden model view: `VisibleScenarioEffect(true)`
+        if !was_shown {
+            for a in self.attached.get_mut(&id).into_iter().flatten() {
+                a.since = Some(frame);
+            }
+        }
         let c = self.chars.get_mut(&id).expect("inserted");
         c.visible = true;
         c.opacity = Tween {
@@ -1176,10 +1189,54 @@ impl<'a> Baker<'a> {
                     }
                 }
             }
+            EffectOp::CharacterShader {
+                character,
+                shader,
+                bundle,
+            } => self.character_shader(*character, shader, bundle, f),
             EffectOp::StopShakeScreen => self.screen_shake = None,
             EffectOp::StopShakeWindow => self.window_shake = None,
             EffectOp::Noop => {}
             other => note(&mut self.notes, &format!("effect not rendered: {other:?}")),
+        }
+    }
+
+    /// `SpecialEffectChangeCharacterShader` (see `hologram`).
+    fn character_shader(&mut self, id: CharacterId, shader: &str, bundle: &str, f: u32) {
+        let kind = match shader {
+            "hologram" => hologram::Kind::Hologram,
+            "monitor" => hologram::Kind::Monitor,
+            "none" => {
+                // `DetachModelEffect` (every character), `DetachScenarioEffectToCharacter`
+                self.shaders.clear();
+                self.attached.remove(&id);
+                return;
+            }
+            other => {
+                note(
+                    &mut self.notes,
+                    &format!("character shader {other:?} not rendered"),
+                );
+                return;
+            }
+        };
+        if self.shaders.get(&id).is_some_and(|c| c.kind == kind) {
+            return;
+        }
+        let seed = self.opts.seed ^ (u64::from(f) << 20) ^ id as u64;
+        self.shaders
+            .insert(id, hologram::Controller::new(kind, f, seed));
+        if kind == hologram::Kind::Hologram {
+            let name = bundle.rsplit('/').next().unwrap_or(bundle);
+            let name = name.split('.').next().unwrap_or(name).to_owned();
+            let shown = self.chars.get(&id).is_some_and(|c| c.visible);
+            let list = self.attached.entry(id).or_default();
+            list.retain(|a| a.name != name);
+            list.push(hologram::Attached {
+                bundle: bundle.to_owned(),
+                name,
+                since: shown.then_some(f),
+            });
         }
     }
 
@@ -1219,10 +1276,18 @@ impl<'a> Baker<'a> {
             if c.hide_at.is_some_and(|h| f >= h) {
                 c.visible = false;
                 c.hide_at = None;
+                // the hide callback: `VisibleScenarioEffect(false)`
+                for a in self.attached.get_mut(id).into_iter().flatten() {
+                    a.since = None;
+                }
             }
             if !c.visible {
                 continue;
             }
+            let hologram = self.shaders.get_mut(id).map(|h| {
+                h.advance(f, self.tb.delta());
+                h.state(f as f32 * self.tb.delta())
+            });
             characters.push(CharacterState {
                 character: c.id,
                 model: c.model,
@@ -1232,6 +1297,7 @@ impl<'a> Baker<'a> {
                 scale: c.scale,
                 color: self.ambient,
                 params: c.values.clone(),
+                hologram,
             });
         }
         let talk = self.talk.as_ref().map(|(index, t)| {
@@ -1297,7 +1363,21 @@ impl<'a> Baker<'a> {
                     age_frames: f - e.2,
                     stop_age: e.3.filter(|&s| s <= f).map(|s| s - e.2),
                     seed: e.2,
+                    character: None,
                 })
+                .chain(self.attached.iter().flat_map(|(&id, list)| {
+                    list.iter().filter_map(move |a| {
+                        let since = a.since.filter(|&s| s <= f)?;
+                        Some(EffectState {
+                            bundle: a.bundle.clone(),
+                            name: a.name.clone(),
+                            age_frames: f - since,
+                            stop_age: None,
+                            seed: since.wrapping_mul(2_654_435_761) ^ id as u32,
+                            character: Some(id),
+                        })
+                    })
+                }))
                 .collect(),
         }
     }

@@ -817,18 +817,17 @@ impl EffectInstance {
     }
 
     /// World (canvas-pixel) matrices of every node: 2×3 affine [a b tx; c d ty] plus each
-    /// node's rect in its own space.
-    fn layout(&self, canvas: [f32; 2]) -> (Vec<[f32; 6]>, Vec<[f32; 4]>) {
+    /// node's rect in its own space. `parent` is the root's parent: its matrix and its rect
+    /// in its own space.
+    fn layout(&self, parent: &Parent) -> (Vec<[f32; 6]>, Vec<[f32; 4]>) {
         let n = self.prefab.nodes.len();
         let mut world = vec![[1.0, 0.0, 0.0, 0.0, 1.0, 0.0]; n];
         let mut rects = vec![[0.0; 4]; n];
-        // the prefab root's parent is `effectLayer`: the whole canvas, pivot at its centre
-        let parent_rect_root = [-canvas[0] * 0.5, -canvas[1] * 0.5, canvas[0], canvas[1]];
         for i in 0..n {
             let node = &self.prefab.nodes[i];
             let (pw, prect) = match node.parent {
                 Some(p) => (world[p], rects[p]),
-                None => ([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], parent_rect_root),
+                None => (parent.matrix, parent.rect),
             };
             let (local_pos, rect) = match &node.xf {
                 Xf::Rect {
@@ -870,12 +869,22 @@ impl EffectInstance {
         (world, rects)
     }
 
-    /// Quads to draw this frame, sorted back to front.
+    /// Quads to draw this frame under `effectLayer` (the whole canvas, pivot at its centre),
+    /// sorted back to front.
     pub fn quads(&self, canvas: [f32; 2]) -> Vec<EffectQuad> {
+        let root = Parent {
+            matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            rect: [-canvas[0] * 0.5, -canvas[1] * 0.5, canvas[0], canvas[1]],
+        };
+        self.quads_under(canvas, &root)
+    }
+
+    /// Quads to draw this frame with the prefab root under `parent`, sorted back to front.
+    pub fn quads_under(&self, canvas: [f32; 2], parent: &Parent) -> Vec<EffectQuad> {
         if self.finished {
             return Vec::new();
         }
-        let (world, rects) = self.layout(canvas);
+        let (world, rects) = self.layout(parent);
         let wu = canvas[1] * 0.5; // canvas pixels per scenario-camera world unit
         let mut out: Vec<(i32, f32, usize, EffectQuad)> = Vec::new();
         let mut seq = 0usize;
@@ -991,6 +1000,15 @@ impl EffectInstance {
             }
         }
     }
+}
+
+/// The transform an instance hangs off, in canvas pixels (origin at the canvas centre, y up).
+#[derive(Debug, Clone, Copy)]
+pub struct Parent {
+    /// 2×3 affine [a b tx; c d ty] of the parent.
+    pub matrix: [f32; 6],
+    /// The parent's rect in its own space (x, y, w, h), for the root's anchors.
+    pub rect: [f32; 4],
 }
 
 fn mul(a: [f32; 6], b: [f32; 6]) -> [f32; 6] {

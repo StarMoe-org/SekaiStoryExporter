@@ -185,3 +185,25 @@ pub const LIP_LEVELS: [f32; 38] = [
 
 /// `ScenarioGuassianBlur` 5-tap weights (`shader.blur_weights`).
 pub const BLUR_WEIGHTS: [f32; 5] = [0.402_6, 0.244_2, 0.244_2, 0.054_5, 0.054_5];
+
+// ---- character shader (hologram) -------------------------------------------------------
+
+/// `Resources/Live2D/Materials/Live2DHologram` (shader `Sekai/Live2D/Live2DHologram`),
+/// identical in CN 6.4.0 and JP 6.8.1: initial `_Line`, `_SubColor.a`, and the constants.
+pub const HOLOGRAM_LINE: f32 = 0.86;
+pub const HOLOGRAM_SUB_ALPHA: f32 = 0.776_470_6;
+pub const HOLOGRAM_INFLUENCE: f32 = 0.6;
+pub const HOLOGRAM_MONOCHROME: [f32; 3] = [0.2, 0.45, 0.35];
+pub const HOLOGRAM_TONE_RATIO: [f32; 3] = [0.9, 1.2, 1.15];
+/// Fragment: `rgb += (_Line >= line) ? line × 0.07 : 0` with `line = _SubTex.r`.
+pub const HOLOGRAM_LINE_GAIN: f32 = 0.07;
+/// Vertex: `TEXCOORD2.y += _Time.x × 0.1`, `_Time.x = t / 20`.
+pub const HOLOGRAM_SCROLL_PER_SECOND: f32 = 0.1 / 20.0;
+/// `Live2DHologramController.Update`: re-roll when `Random.Range(0, 10000) < 150` or the
+/// countdown ran out: `_Line ∈ [0.6, 0.8]`, `_SubColor.a ∈ [0.85, 0.9]`, countdown ∈ [0, 0.5].
+pub const HOLOGRAM_REROLL_CHANCE: (i32, i32) = (150, 10_000);
+pub const HOLOGRAM_LINE_RANGE: [f32; 2] = [0.6, 0.8];
+pub const HOLOGRAM_ALPHA_RANGE: [f32; 2] = [0.85, 0.9];
+pub const HOLOGRAM_COUNTDOWN_RANGE: [f32; 2] = [0.0, 0.5];
+/// `Setup`: countdown = `Random.Range(0, 0.2) + 0.05`.
+pub const HOLOGRAM_FIRST_COUNTDOWN: [f32; 2] = [0.05, 0.25];

@@ -50,7 +50,8 @@ ripper rip unit:school-refusal-story-chapter/1              # CN，结果在 out
 ripper --region jp rip event:185/1                          # 日服，结果在 out/jp/
 ```
 
-**4. 从客户端导出 UI 套件。** 对话框贴图、字体和转场粒子随安装包分发，不在 CDN 上。
+**4. 从客户端导出 UI 套件。** 对话框贴图、字体、转场粒子和全息扫描线贴图随安装包分发，不在 CDN 上。
+已有的旧套件缺 `holo.png` 时，全息角色只少扫描线的微弱闪烁，重新导出即可补上。
 用与剧情同一区服的客户端导出：
 
 ```bash
