@@ -262,6 +262,8 @@ struct Baker<'a> {
     shaders: BTreeMap<CharacterId, hologram::Controller>,
     attached: BTreeMap<CharacterId, Vec<hologram::Attached>>,
     audio: Vec<AudioCue>,
+    /// `bgmVolumeTweener` (see `ParamTable::bgm_volume`).
+    bgm_volume: Vec<VolumeTween>,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
     notes: Vec<String>,
@@ -317,6 +319,7 @@ impl<'a> Baker<'a> {
             shaders: BTreeMap::new(),
             attached: BTreeMap::new(),
             audio: Vec::new(),
+            bgm_volume: Vec::new(),
             bgm: None,
             se_loops: BTreeMap::new(),
             notes: tl.notes.clone(),
@@ -387,6 +390,7 @@ impl<'a> Baker<'a> {
             models: self.models,
             frames,
             audio: self.audio,
+            bgm_volume: self.bgm_volume,
             notes: self.notes,
         })
     }
@@ -714,9 +718,18 @@ impl<'a> Baker<'a> {
                         self.audio[i].fade_out = frames;
                     }
                 }
-                SoundOp::BgmVolume { .. }
-                | SoundOp::BgmAisacVolume { .. }
-                | SoundOp::BgmBlock { .. } => {
+                // `SafeKill(bgmVolumeTweener)`, then `DOTween.To(AisacVolumeBGM, volume,
+                // duration)` from the current value
+                SoundOp::BgmVolume { volume, duration } => {
+                    let from = VolumeTween::at(&self.bgm_volume, f64::from(f));
+                    self.bgm_volume.push(VolumeTween {
+                        start: f,
+                        frames: self.tb.frames_for(duration.max(0.0)),
+                        from,
+                        to: *volume,
+                    });
+                }
+                SoundOp::BgmAisacVolume { .. } | SoundOp::BgmBlock { .. } => {
                     note(
                         &mut self.notes,
                         "BGM volume / AISAC / block changes are not applied yet",

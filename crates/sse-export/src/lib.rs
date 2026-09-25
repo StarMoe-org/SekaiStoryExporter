@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use sse_assets::Library;
-use sse_params::{AudioKind, ParamTable};
+use sse_params::{AudioKind, ParamTable, VolumeTween};
 use sse_render::Renderer;
 
 pub const MIX_RATE: u32 = 48_000;
@@ -75,6 +75,10 @@ pub fn mix(lib: &Library, table: &ParamTable, frames: u32) -> Result<Vec<f32>, E
                 };
                 let t = (pos - i0 as f64) as f32;
                 let mut g = gain;
+                if cue.kind == AudioKind::Bgm && !table.bgm_volume.is_empty() {
+                    let frame = i as f64 * fps / f64::from(MIX_RATE);
+                    g *= VolumeTween::at(&table.bgm_volume, frame);
+                }
                 if cue.fade_in > 0 && local < fade_in {
                     g *= local as f32 / fade_in as f32;
                 }

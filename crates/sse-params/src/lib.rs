@@ -20,6 +20,10 @@ pub struct ParamTable {
     pub models: Vec<String>,
     pub frames: Vec<FrameState>,
     pub audio: Vec<AudioCue>,
+    /// `SoundData` PlayMode 4: tweens of the `BGM` category AISAC `VOL_BGM_SCE` (a linear
+    /// 0–1 volume graph in the client's ACF, default 1), in start order.
+    #[serde(default)]
+    pub bgm_volume: Vec<VolumeTween>,
     /// Approximations and unsupported content, for the export report.
     pub notes: Vec<String>,
 }
@@ -191,6 +195,34 @@ pub struct BannerState {
     pub alpha: f32,
 }
 
+/// A DOTween (ease OutQuad) of a volume from `from` to `to` over `frames`, from `start`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct VolumeTween {
+    pub start: u32,
+    pub frames: u32,
+    pub from: f32,
+    pub to: f32,
+}
+
+impl VolumeTween {
+    fn value(&self, frame: f64) -> f32 {
+        if self.frames == 0 {
+            return self.to;
+        }
+        let t = ((frame - f64::from(self.start)) / f64::from(self.frames)).clamp(0.0, 1.0) as f32;
+        self.from + (self.to - self.from) * (t * (2.0 - t))
+    }
+
+    /// The volume at `frame` (fractional) given the tweens in start order; 1 before any.
+    pub fn at(tweens: &[VolumeTween], frame: f64) -> f32 {
+        tweens
+            .iter()
+            .rev()
+            .find(|t| f64::from(t.start) <= frame)
+            .map_or(1.0, |t| t.value(frame))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioCue {
     /// Library-relative waveform files (played together).
@@ -212,4 +244,30 @@ pub enum AudioKind {
     Se,
     Voice,
     Movie,
+}
+
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+
+    #[test]
+    fn bgm_volume_tweens_ease_out_quad_from_the_current_value() {
+        let t = [
+            VolumeTween {
+                start: 10,
+                frames: 20,
+                from: 1.0,
+                to: 0.0,
+            },
+            VolumeTween {
+                start: 20,
+                frames: 0,
+                from: 0.75,
+                to: 0.5,
+            },
+        ];
+        assert_eq!(VolumeTween::at(&t, 0.0), 1.0);
+        assert!((VolumeTween::at(&t, 15.0) - (1.0 - 0.4375)).abs() < 1e-6);
+        assert_eq!(VolumeTween::at(&t, 25.0), 0.5);
+    }
 }
