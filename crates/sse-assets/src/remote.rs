@@ -4,7 +4,8 @@
 //! directory before parsing, and the rest of sse reads the mirror. Per bundle, the remote
 //! `_ripper.json` decides whether the cached copy is current:
 //!
-//! - `sound/…` bundles (voice, BGM, SE packs) contribute only the waveforms the index references;
+//! - `sound/…` voice and SE bundles contribute only the waveforms the index references (BGM
+//!   bundles come whole: interactive BGMs play every block's waveform and read the `.acb`);
 //! - every other bundle is mirrored whole (models, motions and effect prefabs are read by
 //!   directory, and backgrounds, scenarios and movies are small next to the SE packs);
 //! - a bundle whose record changed is dropped and fetched again; its record is written last, so a
@@ -242,14 +243,11 @@ impl Mirror {
 
     /// Brings every file `index` needs into the mirror.
     pub fn sync_episode(&self, index: &EpisodeIndex) -> Result<()> {
-        // `sound/…` bundles: only the referenced waveforms.
+        // `sound/…` SE and voice bundles: only the referenced waveforms. BGM bundles come
+        // whole: interactive BGMs need every block's waveform and the `.acb`.
         let mut partial: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-        for audio in index
-            .bgm
-            .values()
-            .chain(index.se.values())
-            .chain(index.voices.values())
-        {
+        let full_bgm: BTreeSet<&str> = index.bgm.values().map(|a| a.bundle.as_str()).collect();
+        for audio in index.se.values().chain(index.voices.values()) {
             let files = partial.entry(audio.bundle.as_str()).or_default();
             for file in &audio.files {
                 if let Some(rest) = file.strip_prefix(&format!("{}/", audio.bundle)) {
@@ -259,6 +257,8 @@ impl Mirror {
         }
         let mut bundles: BTreeSet<&str> = index.bundles.iter().map(String::as_str).collect();
         bundles.extend(partial.keys().copied());
+        bundles.extend(full_bgm.iter().copied());
+        partial.retain(|b, _| !full_bgm.contains(b));
 
         let mut downloads = Vec::new();
         let mut records = Vec::new();

@@ -24,6 +24,10 @@ pub struct ParamTable {
     /// 0–1 volume graph in the client's ACF, default 1), in start order.
     #[serde(default)]
     pub bgm_volume: Vec<VolumeTween>,
+    /// `SoundData` PlayMode 5: `BGM_VERTICAL` AISAC control values set on the BGM player,
+    /// (frame, value), in order.
+    #[serde(default)]
+    pub bgm_vertical: Vec<(u32, f32)>,
     /// Approximations and unsupported content, for the export report.
     pub notes: Vec<String>,
 }
@@ -306,6 +310,49 @@ pub struct AudioCue {
     pub fade_in: u32,
     pub fade_out: u32,
     pub kind: AudioKind,
+    /// A BGM track's local AISAC volume graph (`BGM_VERTICAL` layers), driven by
+    /// `ParamTable::bgm_vertical`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aisac: Option<AisacCurve>,
+}
+
+/// Control → volume points (piecewise linear) and the control's default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AisacCurve {
+    pub points: Vec<[f32; 2]>,
+    pub default: f32,
+}
+
+impl AisacCurve {
+    pub fn volume(&self, control: f32) -> f32 {
+        let p = &self.points;
+        match p.len() {
+            0 => 1.0,
+            1 => p[0][1],
+            _ => {
+                if control <= p[0][0] {
+                    return p[0][1];
+                }
+                for w in p.windows(2) {
+                    if control <= w[1][0] {
+                        let t = (control - w[0][0]) / (w[1][0] - w[0][0]).max(1e-9);
+                        return w[0][1] + (w[1][1] - w[0][1]) * t;
+                    }
+                }
+                p[p.len() - 1][1]
+            }
+        }
+    }
+
+    /// The layer's volume at `frame` given the `BGM_VERTICAL` settings in order.
+    pub fn at(&self, sets: &[(u32, f32)], frame: f64) -> f32 {
+        let control = sets
+            .iter()
+            .rev()
+            .find(|(f, _)| f64::from(*f) <= frame)
+            .map_or(self.default, |s| s.1);
+        self.volume(control)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

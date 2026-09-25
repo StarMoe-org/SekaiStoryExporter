@@ -38,6 +38,9 @@ pub fn mix(lib: &Library, table: &ParamTable, frames: u32) -> Result<Vec<f32>, E
     let total = (f64::from(frames) / fps * f64::from(MIX_RATE)).ceil() as usize;
     let mut out = vec![0.0_f32; total * 2];
     let at = |frame: u32| (f64::from(frame) / fps * f64::from(MIX_RATE)) as usize;
+    // interactive BGMs replay the same waveforms block after block
+    let mut cache: std::collections::BTreeMap<String, std::sync::Arc<sse_assets::Pcm>> =
+        std::collections::BTreeMap::new();
     for cue in &table.audio {
         let gain = cue.volume
             * match cue.kind {
@@ -46,7 +49,14 @@ pub fn mix(lib: &Library, table: &ParamTable, frames: u32) -> Result<Vec<f32>, E
                 AudioKind::Voice | AudioKind::Movie => 1.0,
             };
         for file in &cue.files {
-            let pcm = lib.load_wav(file)?;
+            let pcm = match cache.get(file) {
+                Some(p) => p.clone(),
+                None => {
+                    let p = std::sync::Arc::new(lib.load_wav(file)?);
+                    cache.insert(file.clone(), p.clone());
+                    p
+                }
+            };
             let ch = usize::from(pcm.channels.max(1));
             let src_frames = pcm.frames();
             if src_frames == 0 {
@@ -78,6 +88,10 @@ pub fn mix(lib: &Library, table: &ParamTable, frames: u32) -> Result<Vec<f32>, E
                 if cue.kind == AudioKind::Bgm && !table.bgm_volume.is_empty() {
                     let frame = i as f64 * fps / f64::from(MIX_RATE);
                     g *= VolumeTween::at(&table.bgm_volume, frame);
+                }
+                if let Some(a) = &cue.aisac {
+                    let frame = i as f64 * fps / f64::from(MIX_RATE);
+                    g *= a.at(&table.bgm_vertical, frame);
                 }
                 if cue.fade_in > 0 && local < fade_in {
                     g *= local as f32 / fade_in as f32;

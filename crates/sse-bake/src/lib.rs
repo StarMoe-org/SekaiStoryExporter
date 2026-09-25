@@ -8,6 +8,7 @@
 //! `Update`), then the animator (motion + facial), eye blink, lip sync, breath, physics
 //! (`LateUpdate`), then the snapshot.
 
+mod bgm;
 mod character;
 mod hologram;
 mod lipsync;
@@ -324,7 +325,11 @@ struct Baker<'a> {
     dolly_material: bool,
     /// Effect 23: (options, open frame, answer frame).
     choice: Option<(Vec<String>, u32, u32)>,
-    bgm: Option<usize>,
+    /// Playing BGM cues (one per track of a layered cue) and an interactive BGM's sequencer.
+    bgm: Vec<usize>,
+    bgm_seq: Option<bgm::Sequencer>,
+    /// `BGM_VERTICAL` control values (see `ParamTable::bgm_vertical`).
+    bgm_vertical: Vec<(u32, f32)>,
     se_loops: BTreeMap<String, usize>,
     notes: Vec<String>,
 }
@@ -389,7 +394,9 @@ impl<'a> Baker<'a> {
             dolly_distortion: EaseTween::fixed(0.0),
             dolly_material: false,
             choice: None,
-            bgm: None,
+            bgm: Vec::new(),
+            bgm_seq: None,
+            bgm_vertical: Vec::new(),
             se_loops: BTreeMap::new(),
             notes: tl.notes.clone(),
         }
@@ -442,11 +449,20 @@ impl<'a> Baker<'a> {
             for c in self.chars.values_mut() {
                 c.late_update(f, dt, self.tb);
             }
+            if let Some(seq) = self.bgm_seq.as_mut() {
+                seq.advance(self.tb.seconds(sse_core::SimFrame(f)), &mut self.audio);
+            }
             frames.push(self.snapshot(f));
         }
         // CleanupSounds(): fade everything out.
         let end = self.tl.end_frame;
         let fade = self.tb.frames_for(consts::CLEANUP_SOUND_FADE_TIME);
+        if let Some(mut seq) = self.bgm_seq.take() {
+            seq.stop(end, 0, &mut self.audio);
+            for &i in &seq.cues {
+                self.audio[i].fade_out = fade.min(end.saturating_sub(self.audio[i].start_frame));
+            }
+        }
         for cue in &mut self.audio {
             if cue.stop_frame.is_none_or(|s| s > end) && cue.looping {
                 cue.stop_frame = Some(end);
@@ -460,6 +476,7 @@ impl<'a> Baker<'a> {
             frames,
             audio: self.audio,
             bgm_volume: self.bgm_volume,
+            bgm_vertical: self.bgm_vertical,
             notes: self.notes,
         })
     }
@@ -730,26 +747,76 @@ impl<'a> Baker<'a> {
         }
     }
 
-    fn play_bgm(&mut self, a: &AudioRef, frame: u32, fade: f32, volume: f32) {
-        let fade_frames = self.tb.frames_for(fade);
-        if let Some(prev) = self.bgm {
-            let cue = &mut self.audio[prev];
+    /// Stops the playing BGM (every layer, and an interactive BGM's sequencer).
+    fn stop_bgm(&mut self, frame: u32, fade: u32) {
+        for i in std::mem::take(&mut self.bgm) {
+            let cue = &mut self.audio[i];
             if cue.stop_frame.is_none() {
-                cue.stop_frame = Some(frame + fade_frames);
-                cue.fade_out = fade_frames;
+                cue.stop_frame = Some(frame + fade);
+                cue.fade_out = fade;
             }
         }
-        self.audio.push(AudioCue {
-            files: a.files.iter().map(|f| f.0.clone()).collect(),
-            start_frame: frame,
-            stop_frame: None,
-            looping: true,
-            volume,
-            fade_in: fade_frames,
-            fade_out: 0,
-            kind: AudioKind::Bgm,
-        });
-        self.bgm = Some(self.audio.len() - 1);
+        if let Some(mut seq) = self.bgm_seq.take() {
+            seq.advance(self.tb.seconds(sse_core::SimFrame(frame)), &mut self.audio);
+            seq.stop(frame, fade, &mut self.audio);
+        }
+    }
+
+    fn play_bgm(&mut self, a: &AudioRef, frame: u32, fade: f32, volume: f32) {
+        let fade_frames = self.tb.frames_for(fade);
+        self.stop_bgm(frame, fade_frames);
+        let files: Vec<String> = a.files.iter().map(|f| f.0.clone()).collect();
+        let structure = self.lib.cue_structure(&files, &a.cue).map(Arc::new);
+        match structure {
+            // interactive BGM: blocks from the first one (`SetFirstBGMBlockIndex(0)`)
+            Some(s) if !s.blocks.is_empty() => {
+                let t = self.tb.seconds(sse_core::SimFrame(frame));
+                let fps = f64::from(self.tb.fps());
+                self.bgm_seq = Some(bgm::Sequencer::start(
+                    s,
+                    t,
+                    volume,
+                    fade_frames,
+                    fps,
+                    &mut self.audio,
+                ));
+            }
+            // a sequence whose tracks carry their own AISAC: one cue per track
+            Some(s) if s.layers.iter().any(Option::is_some) => {
+                for (wave, aisac) in s.waves.iter().zip(&s.layers) {
+                    let Some(wave) = wave else { continue };
+                    self.audio.push(AudioCue {
+                        files: vec![wave.clone()],
+                        start_frame: frame,
+                        stop_frame: None,
+                        looping: true,
+                        volume,
+                        fade_in: fade_frames,
+                        fade_out: 0,
+                        kind: AudioKind::Bgm,
+                        aisac: aisac.clone().map(|a| AisacCurve {
+                            points: a.points,
+                            default: a.default,
+                        }),
+                    });
+                    self.bgm.push(self.audio.len() - 1);
+                }
+            }
+            _ => {
+                self.audio.push(AudioCue {
+                    files,
+                    start_frame: frame,
+                    stop_frame: None,
+                    looping: true,
+                    volume,
+                    fade_in: fade_frames,
+                    fade_out: 0,
+                    kind: AudioKind::Bgm,
+                    aisac: None,
+                });
+                self.bgm.push(self.audio.len() - 1);
+            }
+        }
     }
 
     fn one_shot(&mut self, a: &AudioRef, frame: u32, volume: f32, kind: AudioKind) {
@@ -762,6 +829,7 @@ impl<'a> Baker<'a> {
             fade_in: 0,
             fade_out: 0,
             kind,
+            aisac: None,
         });
     }
 
@@ -821,6 +889,7 @@ impl<'a> Baker<'a> {
                             fade_in: self.tb.frames_for(*fade),
                             fade_out: 0,
                             kind: AudioKind::Se,
+                            aisac: None,
                         });
                         self.se_loops.insert(name.clone(), self.audio.len() - 1);
                     }
@@ -830,11 +899,8 @@ impl<'a> Baker<'a> {
                     if let Some(i) = self.se_loops.remove(se) {
                         self.audio[i].stop_frame = Some(f + frames);
                         self.audio[i].fade_out = frames;
-                    } else if !bgm.is_empty()
-                        && let Some(i) = self.bgm.take()
-                    {
-                        self.audio[i].stop_frame = Some(f + frames);
-                        self.audio[i].fade_out = frames;
+                    } else if !bgm.is_empty() {
+                        self.stop_bgm(f, frames);
                     }
                 }
                 // `SafeKill(bgmVolumeTweener)`, then `DOTween.To(AisacVolumeBGM, volume,
@@ -848,11 +914,14 @@ impl<'a> Baker<'a> {
                         to: *volume,
                     });
                 }
-                SoundOp::BgmAisacVolume { .. } | SoundOp::BgmBlock { .. } => {
-                    note(
-                        &mut self.notes,
-                        "BGM volume / AISAC / block changes are not applied yet",
-                    );
+                // `SetValueToBGMAISAC(Bgm, "BGM_VERTICAL", Volume)` on the BGM player
+                SoundOp::BgmAisacVolume { value } => self.bgm_vertical.push((f, *value)),
+                // `SetBgmBlockIndex(BgmBlockIndex)` while a BGM plays (see `bgm`)
+                SoundOp::BgmBlock { index } => {
+                    let t = self.tb.seconds(sse_core::SimFrame(f));
+                    if let (Some(seq), Ok(i)) = (self.bgm_seq.as_mut(), usize::try_from(*index)) {
+                        seq.request(i, t, &mut self.audio);
+                    }
                 }
                 SoundOp::Nothing => {}
             }
