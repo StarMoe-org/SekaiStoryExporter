@@ -135,6 +135,10 @@ enum Prop {
     /// `Transform` localScale / localPosition component (the SSR converter names them)
     Scale(usize),
     Position(usize),
+    /// `localEulerAnglesRaw.z` (degrees; the effects only turn about z)
+    EulerZ,
+    /// `SpriteRenderer.m_Color` component
+    SpriteColor(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -365,6 +369,23 @@ impl Prefab {
                                     [f(&c4["r"]), f(&c4["g"]), f(&c4["b"]), f(&c4["a"])],
                                 ));
                             }
+                            // `ParentRectFitter.OnEnable → FitParent`: anchors 0–1 and zero
+                            // offsets, i.e. the parent's rect
+                            "ParentRectFitter" if ct["m_Enabled"].as_i64().unwrap_or(1) != 0 => {
+                                if let Xf::Rect {
+                                    anchor_min,
+                                    anchor_max,
+                                    anchored,
+                                    size_delta,
+                                    ..
+                                } = &mut node.xf
+                                {
+                                    *anchor_min = [0.0, 0.0];
+                                    *anchor_max = [1.0, 1.0];
+                                    *anchored = [0.0, 0.0];
+                                    *size_delta = [0.0, 0.0];
+                                }
+                            }
                             // `Awake` runs whether or not the component is enabled
                             "ParticleShaderSettings" => {
                                 shader_settings = Some(ct["mode"].as_i64().unwrap_or(0));
@@ -530,6 +551,12 @@ fn load_animator(
             114 if attr == h("m_Color.a") => Some(Prop::Color(3)),
             224 if attr == h("m_AnchoredPosition.x") => Some(Prop::AnchoredX),
             224 if attr == h("m_AnchoredPosition.y") => Some(Prop::AnchoredY),
+            224 if attr == h("m_LocalPosition.z") => Some(Prop::Position(2)),
+            4 | 224 if attr == h("localEulerAnglesRaw.z") => Some(Prop::EulerZ),
+            212 => ["m_Color.r", "m_Color.g", "m_Color.b", "m_Color.a"]
+                .iter()
+                .position(|n| attr == h(n))
+                .map(Prop::SpriteColor),
             4 => ["m_LocalScale.x", "m_LocalScale.y", "m_LocalScale.z"]
                 .iter()
                 .position(|n| attr == h(n))
@@ -679,6 +706,9 @@ pub struct EffectInstance {
     anchored: Vec<[f32; 2]>,
     scale: Vec<[f32; 3]>,
     pos: Vec<[f32; 3]>,
+    /// Animated z rotation (degrees) replacing the node's own.
+    euler_z: Vec<Option<f32>>,
+    sprite_color: Vec<[f32; 4]>,
     anim: Option<AnimPlay>,
     time: f32,
     stopped_at: Option<f32>,
@@ -712,6 +742,12 @@ impl EffectInstance {
                 .collect(),
             scale: prefab.nodes.iter().map(|n| n.scale).collect(),
             pos: prefab.nodes.iter().map(|n| n.pos).collect(),
+            euler_z: vec![None; prefab.nodes.len()],
+            sprite_color: prefab
+                .nodes
+                .iter()
+                .map(|n| n.sprite_renderer.as_ref().map_or([1.0; 4], |s| s.1))
+                .collect(),
             anim: prefab
                 .play_on_enable
                 .then_some(())
@@ -906,6 +942,8 @@ impl EffectInstance {
                 Prop::AnchoredY => self.anchored[node][1] = v,
                 Prop::Scale(k) => self.scale[node][k] = v,
                 Prop::Position(k) => self.pos[node][k] = v,
+                Prop::EulerZ => self.euler_z[node] = Some(v),
+                Prop::SpriteColor(c) => self.sprite_color[node][c] = v,
             }
         }
     }
@@ -953,7 +991,10 @@ impl EffectInstance {
             };
             // z rotation of the quaternion (the prefabs only turn about z)
             let q = node.rot;
-            let ang = 2.0 * q[2].atan2(q[3]);
+            let ang = match self.euler_z[i] {
+                Some(deg) => deg.to_radians(),
+                None => 2.0 * q[2].atan2(q[3]),
+            };
             let (s, c) = (sinf(ang), cosf(ang));
             let (sx, sy) = (self.scale[i][0], self.scale[i][1]);
             let l = [c * sx, -s * sy, local_pos[0], s * sx, c * sy, local_pos[1]];
@@ -1022,7 +1063,7 @@ impl EffectInstance {
                 ));
                 seq += 1;
             }
-            if let Some((s, col, order)) = &node.sprite_renderer {
+            if let Some((s, _, order)) = &node.sprite_renderer {
                 let (sw, sh) = (s.size[0] / s.ppu, s.size[1] / s.ppu);
                 let (x0, y0) = (-s.pivot[0] * sw, -s.pivot[1] * sh);
                 let corners = [
@@ -1033,13 +1074,13 @@ impl EffectInstance {
                 ];
                 out.push((
                     *order,
-                    -node.pos[2],
+                    -self.pos[i][2],
                     seq,
                     EffectQuad {
                         order: *order,
                         corners,
                         uvs: rect_uvs(s.tex.uv),
-                        color: *col,
+                        color: self.sprite_color[i],
                         tex: Some(s.tex.png.clone()),
                         blend: Blend::Alpha,
                     },
@@ -1071,7 +1112,7 @@ impl EffectInstance {
                     });
                     out.push((
                         def.sorting_order,
-                        -node.pos[2],
+                        -self.pos[i][2],
                         seq,
                         EffectQuad {
                             order: def.sorting_order,
