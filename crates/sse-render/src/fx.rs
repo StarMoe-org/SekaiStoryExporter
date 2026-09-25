@@ -465,6 +465,11 @@ fn update(e: &Emitter, st: &mut EmitterState, dt: f32) {
     }
 }
 
+/// The noise field shared with the generic particle systems (`particle.rs`).
+pub fn noise3(pos: [f32; 3], freq: f32, seed: u32) -> (f32, f32, f32) {
+    noise_field(pos, freq, seed)
+}
+
 /// Value noise in a 2D lattice, trilinear in 3D: an approximation of Unity's
 /// `NoiseModule` field (see the module docs).
 fn noise_field(pos: [f32; 3], freq: f32, seed: u32) -> (f32, f32, f32) {

@@ -9,6 +9,13 @@ together with its fidelity impact.
 
 ## 未发布
 
+- 剧情特效 prefab（特效 15 / 16，#51）：`PlayScenarioEffect` 在 `Duration` 之后把 SSR 库里的 prefab 实例化到
+  EffectLayer，`StopScenarioEffect` 走 `CommandAnimator.Stop`（停发射、播 "Stop" 状态、全部粒子消亡后销毁）。
+  新增 `sse-render` 的 `effect.rs`（层级 / RectTransform 布局 / Image / SpriteRenderer / Canvas 排序 / Animator）
+  与 `particle.rs`（通用 Unity 粒子）。依据见 `docs/reverse/versions/jp-6.8.1/effects.md`。
+  **像素影响**：用到这些特效的话（日服 event 185/217 等）出现压暗、白色梦境、闭眼 / 睁眼、速度线、聚光、
+  下落光、眩晕剧场等画面；逐粒子位置与游戏不同（随机数不可复现）。CN 第一章不受影响（逐像素相同）。
+
 - 日服：`sse` 按 library 的 `ripper.lock.json` `region` 选字体（jp → `FOT-RodinNTLGPro-DB/EB.otf`，
   cn → 思源黑体 SC），`--game cn|jp` 可覆盖。依据见 `docs/reverse/versions/jp-6.8.1/text.md`：
   日服 TalkWindow 排版、FaceInfo 与 CN 逐项相同，只有源字体不同。

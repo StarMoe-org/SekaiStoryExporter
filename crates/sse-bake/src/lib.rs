@@ -57,6 +57,10 @@ struct Tween {
     ease_out_quad: bool,
 }
 
+/// How long a stopped effect stays in the frame state; the renderer drops it as soon as
+/// `WaitAllStop` would destroy it (no live particle, Stop clip over).
+const EFFECT_TAIL: f32 = 30.0;
+
 /// A `ScenarioSideFadePlayer.Play` run.
 struct SideFadeRt {
     from: [f32; 2],
@@ -243,6 +247,8 @@ struct Baker<'a> {
     screen_shake: Option<shake::Shake>,
     window_shake: Option<shake::Shake>,
     side_fade: Option<SideFadeRt>,
+    /// `PlayScenarioEffect` instances: (bundle, name, start frame, stop frame)
+    effects: Vec<(String, String, u32, Option<u32>)>,
     audio: Vec<AudioCue>,
     bgm: Option<usize>,
     se_loops: BTreeMap<String, usize>,
@@ -295,6 +301,7 @@ impl<'a> Baker<'a> {
             screen_shake: None,
             window_shake: None,
             side_fade: None,
+            effects: Vec::new(),
             audio: Vec::new(),
             bgm: None,
             se_loops: BTreeMap::new(),
@@ -957,6 +964,22 @@ impl<'a> Baker<'a> {
                 };
                 self.side_fade = Some(SideFadeRt { from, to, start: f, frames: self.tb.frames_for(d), hide });
             }
+            // cases 15 / 16: `FinishSnippet`, wait `Duration`, then `PlayScenarioEffect` /
+            // `StopScenarioEffect` (JP 6.8.1 `SnippetActionSpecialEffect`). Stop matches every
+            // effector under `effectLayer` by effect name.
+            EffectOp::PlayScenarioEffect { name, bundle } => {
+                let at = f + self.tb.frames_for(d);
+                self.effects.push((bundle.clone(), name.clone(), at, None));
+                note(&mut self.notes, "scenario effect prefabs: simulated from their Unity modules (particles approximate)");
+            }
+            EffectOp::StopScenarioEffect { name } => {
+                let at = f + self.tb.frames_for(d);
+                for e in &mut self.effects {
+                    if e.1 == *name && e.3.is_none() && e.2 <= at {
+                        e.3 = Some(at);
+                    }
+                }
+            }
             EffectOp::StopShakeScreen => self.screen_shake = None,
             EffectOp::StopShakeWindow => self.window_shake = None,
             EffectOp::Noop => {}
@@ -1055,6 +1078,18 @@ impl<'a> Baker<'a> {
             scenario_shake: self.screen_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
             window_shake: self.window_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
             side_fade: self.side_fade.as_ref().and_then(|s| s.at(f)),
+            effects: self
+                .effects
+                .iter()
+                .filter(|e| e.2 <= f && e.3.is_none_or(|s| f < s + self.tb.frames_for(EFFECT_TAIL)))
+                .map(|e| EffectState {
+                    bundle: e.0.clone(),
+                    name: e.1.clone(),
+                    age_frames: f - e.2,
+                    stop_age: e.3.filter(|&s| s <= f).map(|s| s - e.2),
+                    seed: e.2,
+                })
+                .collect(),
         }
     }
 }

@@ -20,11 +20,13 @@
 //! - Masks are per-drawable at RT resolution, not the game's shared 1024² × 4 atlas
 //! - Hardware bilinear sampling (determinism R-8 asks for manual bilinear)
 
+mod effect;
 mod fx;
 mod fx_data;
 mod gpu;
 mod movie;
 mod native_ui;
+mod particle;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -81,6 +83,10 @@ impl RenderConfig {
     }
 }
 
+/// `ScenarioLayer` (the characters) canvas sorting order (`rendering.md` §1): effects sorted
+/// below it are drawn before the characters.
+const SCENARIO_LAYER_ORDER: i32 = 220;
+
 pub struct Renderer {
     gpu: gpu::Gpu,
     cfg: RenderConfig,
@@ -101,6 +107,11 @@ pub struct Renderer {
     fx_atlas: Option<gpu::Image>,
     /// `tex_transition_top` / `tex_transition_left` (the side fade's feathered edges).
     side_edges: Option<(gpu::Image, gpu::Image)>,
+    /// Scenario effect prefabs by (bundle, name); `None` when loading failed.
+    prefabs: BTreeMap<(String, String), Option<std::sync::Arc<effect::Prefab>>>,
+    /// Live instances by (bundle, name, seed): the instance and its age in frames.
+    effects: BTreeMap<(String, String, u32), (effect::EffectInstance, u32)>,
+    white: gpu::Image,
 }
 
 impl Renderer {
@@ -134,7 +145,6 @@ impl Renderer {
         Ok(Self {
             body_font: font(&ui.font_body)?,
             name_font: font(&ui.font_name)?,
-            gpu,
             cfg,
             models,
             images: BTreeMap::new(),
@@ -149,6 +159,10 @@ impl Renderer {
             fps: table.fps,
             fx_atlas,
             side_edges,
+            prefabs: BTreeMap::new(),
+            effects: BTreeMap::new(),
+            white: gpu.image(&image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]))),
+            gpu,
         })
     }
 
@@ -228,6 +242,9 @@ impl Renderer {
             }
         }
 
+        // `PlayScenarioEffect` prefabs (EffectLayer), in canvas pixels → target pixels
+        self.scenario_effects(frame, &mut plan, content, k, [w, h])?;
+
         // EffectLayer: `fx_transition_scenario`, re-simulated from its instantiation
         if let (Some(fx), Some(atlas)) = (&frame.fx, &self.fx_atlas) {
             let mut sim = fx::TransitionFx::new(fx.seed);
@@ -299,6 +316,78 @@ impl Renderer {
         }
 
         Ok(self.gpu.render(&mut self.models, &plan)?)
+    }
+
+    /// Steps (or rebuilds) every live scenario effect to its age and plans its quads.
+    fn scenario_effects(
+        &mut self,
+        frame: &FrameState,
+        plan: &mut gpu::FramePlan,
+        content: [f32; 2],
+        k: f32,
+        screen: [f32; 2],
+    ) -> Result<(), RenderError> {
+        let dt = 1.0 / self.fps as f32;
+        let mut keep = std::collections::BTreeSet::new();
+        for e in &frame.effects {
+            let pk = (e.bundle.clone(), e.name.clone());
+            if !self.prefabs.contains_key(&pk) {
+                let p = effect::Prefab::load(&self.lib, &e.bundle, &e.name).ok().map(std::sync::Arc::new);
+                self.prefabs.insert(pk.clone(), p);
+            }
+            let Some(prefab) = self.prefabs[&pk].clone() else { continue };
+            let key = (e.bundle.clone(), e.name.clone(), e.seed);
+            keep.insert(key.clone());
+            let stale = self.effects.get(&key).is_none_or(|(_, age)| *age > e.age_frames);
+            if stale {
+                self.effects.insert(key.clone(), (effect::EffectInstance::new(prefab, e.seed, dt), 0));
+            }
+            let (inst, age) = self.effects.get_mut(&key).expect("inserted");
+            if e.stop_age == Some(*age) {
+                inst.stop();
+            }
+            while *age < e.age_frames {
+                inst.step();
+                *age += 1;
+                if e.stop_age == Some(*age) {
+                    inst.stop();
+                }
+            }
+        }
+        self.effects.retain(|k, _| keep.contains(k));
+        let [sx, sy] = frame.scenario_shake;
+        let to_screen = |p: [f32; 2]| [screen[0] * 0.5 + (p[0] + sx) * k, screen[1] * 0.5 - (p[1] + sy) * k];
+        let quads: Vec<effect::EffectQuad> = self.effects.values().flat_map(|(inst, _)| inst.quads(content)).collect();
+        if std::env::var_os("SSE_DEBUG_EFFECTS").is_some() {
+            for ((b, n, s), (inst, age)) in &self.effects {
+                let q = inst.quads(content);
+                eprintln!("effect {b} {n} seed {s} age {age} finished {} quads {}", inst.finished, q.len());
+                for x in q.iter().take(4) {
+                    eprintln!("   order {} corners {:?} color {:?} tex {:?}", x.order, x.corners, x.color, x.tex);
+                }
+            }
+        }
+        for q in quads {
+            let image = match &q.tex {
+                Some(t) => self.image(t)?,
+                None => self.white.id,
+            };
+            // `EffectQuad` UVs are image-space (v down); ParticleDraw takes per-corner UVs
+            let [u0, v0, u1, v1] = q.uv;
+            let d = gpu::ParticleDraw {
+                additive: q.blend == effect::Blend::Additive,
+                image,
+                corners: q.corners.map(to_screen),
+                uvs: [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+                color: q.color,
+            };
+            if q.order < SCENARIO_LAYER_ORDER {
+                plan.effects_back.push(d);
+            } else {
+                plan.effects_front.push(d);
+            }
+        }
+        Ok(())
     }
 
     /// `SideFadePlayer` prefab (JP 6.8.1 `resources.assets|121155`): the root stretches over the
