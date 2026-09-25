@@ -509,13 +509,11 @@ impl Renderer {
                 Some(t) => self.image(t)?,
                 None => self.white.id,
             };
-            // `EffectQuad` UVs are image-space (v down); ParticleDraw takes per-corner UVs
-            let [u0, v0, u1, v1] = q.uv;
             let d = gpu::ParticleDraw {
                 additive: q.blend == effect::Blend::Additive,
                 image,
                 corners: q.corners.map(to_screen),
-                uvs: [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+                uvs: q.uvs,
                 color: q.color,
             };
             if q.order < SCENARIO_LAYER_ORDER {

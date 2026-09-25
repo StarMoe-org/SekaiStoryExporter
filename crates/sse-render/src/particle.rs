@@ -280,6 +280,8 @@ pub struct SystemDef {
     size: Curve,
     size3d: Option<(Curve, Curve)>,
     rotation: Curve,
+    /// `rotation3D`: start rotation about x and y (radians).
+    rotation_xy: Option<[Curve; 2]>,
     color: ColorSpec,
     gravity: Curve,
     max_particles: usize,
@@ -291,6 +293,10 @@ pub struct SystemDef {
     size_ol: Option<(Curve, Option<Curve>)>,
     color_ol: Option<ColorSpec>,
     rotation_ol: Option<Curve>,
+    /// `RotationModule.separateAxes`: angular velocity about x and y.
+    rotation_ol_xy: Option<[Curve; 2]>,
+    /// Mesh render mode geometry (the built-in quad unless the prefab loader sets one).
+    pub mesh: Option<std::sync::Arc<Mesh>>,
     noise: Option<(Curve, f32, bool)>,
     /// tiles x, tiles y, frame over time, start frame, cycles, single row
     sheet: Option<(u32, u32, Curve, Curve, f32, Option<u32>)>,
@@ -361,6 +367,12 @@ impl SystemDef {
                 )
             }),
             rotation: Curve::parse(&i["startRotation"]),
+            rotation_xy: bv(i, "rotation3D").then(|| {
+                [
+                    Curve::parse(&i["startRotationX"]),
+                    Curve::parse(&i["startRotationY"]),
+                ]
+            }),
             color: ColorSpec::parse(&i["startColor"]),
             gravity: Curve::parse(&i["gravityModifier"]),
             max_particles: i["maxNumParticles"].as_u64().unwrap_or(1000) as usize,
@@ -404,6 +416,14 @@ impl SystemDef {
             }),
             color_ol: on("ColorModule").then(|| ColorSpec::parse(&ps["ColorModule"]["gradient"])),
             rotation_ol: on("RotationModule").then(|| Curve::parse(&ps["RotationModule"]["curve"])),
+            rotation_ol_xy: (on("RotationModule") && bv(&ps["RotationModule"], "separateAxes"))
+                .then(|| {
+                    [
+                        Curve::parse(&ps["RotationModule"]["x"]),
+                        Curve::parse(&ps["RotationModule"]["y"]),
+                    ]
+                }),
+            mesh: None,
             noise: on("NoiseModule").then(|| {
                 let n = &ps["NoiseModule"];
                 (
@@ -449,8 +469,164 @@ impl SystemDef {
 // ------------------------------------------------------------------ runtime
 
 /// A particle quad: corners (local frame, world units), UV rect (v up), colour.
-/// Corners, UVs, colour, and the particle's `Custom1.x` vertex stream (0 without one).
-pub type Quad = ([[f32; 2]; 4], [f32; 4], [f32; 4], f32);
+/// Corners (a degenerate fourth corner for a mesh triangle), per-corner UVs (v up, in the
+/// texture sheet), colour, and the particle's `Custom1.x` vertex stream (0 without one).
+pub type Quad = ([[f32; 2]; 4], [[f32; 2]; 4], [f32; 4], f32);
+
+/// Particle mesh geometry (`ParticleSystemRenderer.m_Mesh` in Mesh render mode).
+#[derive(Debug, Clone)]
+pub struct Mesh {
+    pub verts: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub tris: Vec<[u32; 3]>,
+}
+
+impl Mesh {
+    /// Unity's built-in Quad (`unity default resources` 10210): 1×1 in XY, facing −z.
+    pub fn quad() -> Self {
+        Mesh {
+            verts: vec![
+                [-0.5, -0.5, 0.0],
+                [0.5, -0.5, 0.0],
+                [0.5, 0.5, 0.0],
+                [-0.5, 0.5, 0.0],
+            ],
+            uvs: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            tris: vec![[0, 1, 2], [0, 2, 3]],
+        }
+    }
+
+    /// Unity's built-in Cube (10202): the unit cube, each face UV-mapped 0–1.
+    pub fn cube() -> Self {
+        let mut m = Mesh {
+            verts: Vec::new(),
+            uvs: Vec::new(),
+            tris: Vec::new(),
+        };
+        // (normal axis, sign)
+        for (axis, sign) in [
+            (0, 1.0),
+            (0, -1.0),
+            (1, 1.0),
+            (1, -1.0),
+            (2, 1.0),
+            (2, -1.0),
+        ] {
+            let base = m.verts.len() as u32;
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            for (a, b) in [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)] {
+                let mut p = [0.0f32; 3];
+                p[axis] = 0.5 * sign;
+                p[u] = a;
+                p[v] = b;
+                m.verts.push(p);
+                m.uvs.push([a + 0.5, b + 0.5]);
+            }
+            m.tris.push([base, base + 1, base + 2]);
+            m.tris.push([base, base + 2, base + 3]);
+        }
+        m
+    }
+
+    /// A serialized Unity `Mesh` (uncompressed, float32 / float16 positions and UV0 in stream 0,
+    /// 16- or 32-bit indices). `None` for layouts this reader does not handle.
+    pub fn from_unity(m: &Value) -> Option<Self> {
+        if m["m_MeshCompression"].as_i64().unwrap_or(0) != 0 {
+            return None;
+        }
+        let vd = &m["m_VertexData"];
+        let count = vd["m_VertexCount"].as_u64()? as usize;
+        let data: Vec<u8> = vd["m_DataSize"]
+            .as_array()?
+            .iter()
+            .map(|b| b.as_u64().unwrap_or(0) as u8)
+            .collect();
+        let chans: Vec<(u64, u64, u64, u64)> = vd["m_Channels"]
+            .as_array()?
+            .iter()
+            .map(|c| {
+                (
+                    c["stream"].as_u64().unwrap_or(0),
+                    c["offset"].as_u64().unwrap_or(0),
+                    c["format"].as_u64().unwrap_or(0),
+                    c["dimension"].as_u64().unwrap_or(0) & 0x0f,
+                )
+            })
+            .collect();
+        let size = |fmt: u64| match fmt {
+            0 => 4,
+            1 => 2,
+            _ => 0,
+        };
+        if chans
+            .iter()
+            .any(|c| c.3 > 0 && (c.0 != 0 || size(c.2) == 0))
+        {
+            return None;
+        }
+        let stride = chans
+            .iter()
+            .filter(|c| c.3 > 0)
+            .map(|c| c.1 + size(c.2) * c.3)
+            .max()? as usize;
+        let read = |i: usize, ch: usize, k: usize| -> f32 {
+            let c = chans[ch];
+            let o = i * stride + c.1 as usize + k * size(c.2) as usize;
+            match c.2 {
+                0 => f32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]),
+                _ => half_to_f32(u16::from_le_bytes([data[o], data[o + 1]])),
+            }
+        };
+        if data.len() < stride * count || chans.first()?.3 < 3 {
+            return None;
+        }
+        let verts = (0..count)
+            .map(|i| [read(i, 0, 0), read(i, 0, 1), read(i, 0, 2)])
+            .collect();
+        let uvs = if chans.get(4).is_some_and(|c| c.3 >= 2) {
+            (0..count).map(|i| [read(i, 4, 0), read(i, 4, 1)]).collect()
+        } else {
+            vec![[0.0, 0.0]; count]
+        };
+        let ib: Vec<u8> = m["m_IndexBuffer"]
+            .as_array()?
+            .iter()
+            .map(|b| b.as_u64().unwrap_or(0) as u8)
+            .collect();
+        let idx: Vec<u32> = if m["m_IndexFormat"].as_i64().unwrap_or(0) == 1 {
+            ib.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
+                .collect()
+        } else {
+            ib.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u32::from(u16::from_le_bytes(*c)))
+                .collect()
+        };
+        let tris = idx
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .filter(|t| t.iter().all(|&v| (v as usize) < count))
+            .copied()
+            .collect();
+        Some(Mesh { verts, uvs, tris })
+    }
+}
+
+fn half_to_f32(h: u16) -> f32 {
+    let s = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let e = i32::from((h >> 10) & 0x1f);
+    let m = f32::from(h & 0x3ff);
+    match e {
+        0 => s * m * (1.0 / 16_777_216.0),
+        31 => s * f32::INFINITY,
+        _ => s * (1.0 + m / 1024.0) * f32::from_bits(((e - 15 + 127) as u32) << 23),
+    }
+}
 
 #[derive(Debug, Clone)]
 struct Particle {
@@ -460,8 +636,10 @@ struct Particle {
     cur_vel: [f32; 3],
     age: f32,
     life: f32,
-    size: [f32; 2],
+    /// x, y, z (z = x without 3D size)
+    size: [f32; 3],
     rot: f32,
+    rot_xy: [f32; 2],
     color: [f32; 4],
     /// Fixed per-particle randoms for curves in "random between" modes.
     rnd: [f32; 8],
@@ -647,7 +825,14 @@ impl SystemState {
         };
         let vel = [dir[0] * speed, dir[1] * speed, dir[2] * speed];
         let color = def.color.eval(unit(r), sys_t);
+        let sz = def
+            .size3d
+            .as_ref()
+            .map_or(sx, |(_, z)| z.eval(unit(r), sys_t));
         let rot = def.rotation.eval(unit(r), sys_t);
+        let rot_xy = def.rotation_xy.as_ref().map_or([0.0; 2], |[x, y]| {
+            [x.eval(unit(r), sys_t), y.eval(unit(r), sys_t)]
+        });
         let seed = next_u32(r);
         self.particles.push(Particle {
             pos,
@@ -655,8 +840,9 @@ impl SystemState {
             cur_vel: vel,
             age: 0.0,
             life,
-            size: [sx, sy],
+            size: [sx, sy, sz],
             rot,
+            rot_xy,
             color,
             rnd,
             seed,
@@ -710,6 +896,10 @@ impl SystemState {
             if let Some(w) = &def.rotation_ol {
                 p.rot += w.eval(p.rnd[7], t) * dt;
             }
+            if let Some([x, y]) = &def.rotation_ol_xy {
+                p.rot_xy[0] += x.eval(p.rnd[7], t) * dt;
+                p.rot_xy[1] += y.eval(p.rnd[7], t) * dt;
+            }
             true
         });
     }
@@ -730,12 +920,13 @@ impl SystemState {
             if c[3] <= 0.002 {
                 continue;
             }
-            let (mut w, mut h) = (p.size[0], p.size[1]);
+            let (mut w, mut h, mut d) = (p.size[0], p.size[1], p.size[2]);
             if let Some((x, y)) = &def.size_ol {
                 let kx = x.eval(p.rnd[1], t);
                 let ky = y.as_ref().map_or(kx, |y| y.eval(p.rnd[1], t));
                 w *= kx;
                 h *= ky;
+                d *= kx;
             }
             match def.render_mode {
                 // `maxParticleSize` is a fraction of the viewport height (2 units)
@@ -748,6 +939,53 @@ impl SystemState {
                 RenderMode::Mesh => {}
             }
             let uv = sheet_uv(def, p, t);
+            let cell = |u: f32, v: f32| [uv[0] + (uv[2] - uv[0]) * u, uv[1] + (uv[3] - uv[1]) * v];
+            let custom = def.custom1x.as_ref().map_or(0.0, |k| k.eval(p.rnd[4], t));
+            // 3D: billboards with a 3D rotation and every mesh particle. The vertices are scaled
+            // by the particle size, rotated (Unity `Quaternion.Euler` order, the same sign as the
+            // 2D billboard rotation) and projected by the orthographic scenario camera.
+            let three_d = def.render_mode == RenderMode::Mesh
+                || (def.render_mode == RenderMode::Billboard && p.rot_xy != [0.0; 2]);
+            if three_d {
+                let quad = Mesh::quad();
+                let (mesh, scale) = match def.render_mode {
+                    RenderMode::Mesh => (def.mesh.as_deref().unwrap_or(&quad), [w, h, d]),
+                    _ => (&quad, [w, h, 1.0]),
+                };
+                let deg = [
+                    -p.rot_xy[0].to_degrees(),
+                    -p.rot_xy[1].to_degrees(),
+                    -p.rot.to_degrees(),
+                ];
+                let proj: Vec<[f32; 2]> = mesh
+                    .verts
+                    .iter()
+                    .map(|v| {
+                        let r = rot_euler([v[0] * scale[0], v[1] * scale[1], v[2] * scale[2]], deg);
+                        [p.pos[0] + r[0], p.pos[1] + r[1]]
+                    })
+                    .collect();
+                let uvs: Vec<[f32; 2]> = mesh.uvs.iter().map(|t| cell(t[0], t[1])).collect();
+                if mesh.tris == [[0, 1, 2], [0, 2, 3]] && proj.len() == 4 {
+                    out.push((
+                        [proj[0], proj[1], proj[2], proj[3]],
+                        [uvs[0], uvs[1], uvs[2], uvs[3]],
+                        c,
+                        custom,
+                    ));
+                } else {
+                    for &[a, b, e] in &mesh.tris {
+                        let (a, b, e) = (a as usize, b as usize, e as usize);
+                        out.push((
+                            [proj[a], proj[b], proj[e], proj[e]],
+                            [uvs[a], uvs[b], uvs[e], uvs[e]],
+                            c,
+                            custom,
+                        ));
+                    }
+                }
+                continue;
+            }
             let corners = match def.render_mode {
                 RenderMode::Stretch => {
                     // width = size.x; length = size.y × lengthScale + speed × velocityScale,
@@ -779,8 +1017,17 @@ impl SystemState {
                     [q(-hw, -hh), q(hw, -hh), q(hw, hh), q(-hw, hh)]
                 }
             };
-            let custom = def.custom1x.as_ref().map_or(0.0, |k| k.eval(p.rnd[4], t));
-            out.push((corners, uv, c, custom));
+            out.push((
+                corners,
+                [
+                    cell(0.0, 0.0),
+                    cell(1.0, 0.0),
+                    cell(1.0, 1.0),
+                    cell(0.0, 1.0),
+                ],
+                c,
+                custom,
+            ));
         }
         out
     }

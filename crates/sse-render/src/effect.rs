@@ -385,6 +385,21 @@ impl Prefab {
                 let seed = crc32fast::hash(node.name.as_bytes())
                     ^ (systems.len() as u32).wrapping_mul(0x9E37_79B9);
                 let mut def = SystemDef::parse(ps, r, seed);
+                // Mesh render mode: the renderer's mesh (built-in Quad 10210 / Cube 10202, or
+                // one serialized in this bundle); others fall back to the quad
+                if def.render_mode == crate::particle::RenderMode::Mesh {
+                    let m = &r["m_Mesh"];
+                    let id = pid(m);
+                    def.mesh = match id {
+                        10202 => Some(crate::particle::Mesh::cube()),
+                        10210 | 0 => None,
+                        _ if m["m_FileID"].as_i64() == Some(0) => {
+                            tree(id).and_then(crate::particle::Mesh::from_unity)
+                        }
+                        _ => None,
+                    }
+                    .map(std::sync::Arc::new);
+                }
                 // `ParticleShaderSettings.mode`: 0 Additive → 1, 1 AlphaBlend → 0
                 if let Some(mode) = shader_settings {
                     def.set_custom1x(if mode == 0 { 1.0 } else { 0.0 });
@@ -633,11 +648,17 @@ fn load_animator(
 pub struct EffectQuad {
     pub order: i32,
     pub corners: [[f32; 2]; 4],
-    /// u0, v0, u1, v1 with v down (image rows)
-    pub uv: [f32; 4],
+    /// Per-corner UVs in image space (v down, image rows).
+    pub uvs: [[f32; 2]; 4],
     pub color: [f32; 4],
     pub tex: Option<String>,
     pub blend: Blend,
+}
+
+/// Corner UVs of an image rect (u0, v0, u1, v1, v down) for corners (−,−) (+,−) (+,+) (−,+)
+/// with y up.
+fn rect_uvs(r: [f32; 4]) -> [[f32; 2]; 4] {
+    [[r[0], r[3]], [r[2], r[3]], [r[2], r[1]], [r[0], r[1]]]
 }
 
 /// The Animator's playing state: current state, time in it, and an optional crossfade.
@@ -993,7 +1014,7 @@ impl EffectInstance {
                     EffectQuad {
                         order: canvas_order,
                         corners,
-                        uv,
+                        uvs: rect_uvs(uv),
                         color: self.color[i],
                         tex,
                         blend: Blend::Alpha,
@@ -1017,7 +1038,7 @@ impl EffectInstance {
                     EffectQuad {
                         order: *order,
                         corners,
-                        uv: s.tex.uv,
+                        uvs: rect_uvs(s.tex.uv),
                         color: *col,
                         tex: Some(s.tex.png.clone()),
                         blend: Blend::Alpha,
@@ -1032,7 +1053,7 @@ impl EffectInstance {
                 let (sx, sy) = (self.scale[i][0], self.scale[i][1]);
                 let tex = mat.as_ref().and_then(|m| m.tex.clone());
                 let blend = mat.as_ref().map_or(Blend::Alpha, |m| m.blend);
-                for (corners, uv, color, custom1) in self.systems[*si].quads(def) {
+                for (corners, uvs, color, custom1) in self.systems[*si].quads(def) {
                     let blend = match blend {
                         Blend::ByCustom1 if custom1 > 0.5 => Blend::Additive,
                         Blend::ByCustom1 => Blend::Alpha,
@@ -1042,9 +1063,12 @@ impl EffectInstance {
                         corners.map(|c| [origin[0] + c[0] * sx * wu, origin[1] + c[1] * sy * wu]);
                     let base = tex.as_ref().map_or([0.0, 0.0, 1.0, 1.0], |t| t.uv);
                     // particle UVs have v up; convert into the texture's (v down) sub-rect
-                    let bu = |u: f32| base[0] + (base[2] - base[0]) * u;
-                    let bv = |v: f32| base[1] + (base[3] - base[1]) * (1.0 - v);
-                    let quad_uv = [bu(uv[0]), bv(uv[3]), bu(uv[2]), bv(uv[1])];
+                    let quad_uv = uvs.map(|[u, v]| {
+                        [
+                            base[0] + (base[2] - base[0]) * u,
+                            base[1] + (base[3] - base[1]) * (1.0 - v),
+                        ]
+                    });
                     out.push((
                         def.sorting_order,
                         -node.pos[2],
@@ -1052,7 +1076,7 @@ impl EffectInstance {
                         EffectQuad {
                             order: def.sorting_order,
                             corners: px,
-                            uv: quad_uv,
+                            uvs: quad_uv,
                             color,
                             tex: tex.as_ref().map(|t| t.png.clone()),
                             blend,
