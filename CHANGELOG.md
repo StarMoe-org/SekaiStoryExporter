@@ -16,6 +16,10 @@ together with its impact.
   且用的是拟合值，描边只有游戏的约 40%。描边改用精确的欧氏距离变换生成。
   **像素影响**：CN 与 JP 所有对话框文字、名字的描边变宽（44 号字 1080p 下约 2.3 px → 5.8 px），与游戏录像对照一致。
   Talk window text outlines now follow the client's shader: about 2.5× wider than before.
+- **ShakeWindow（特效 6 / 26）只抖文字**：`TalkWindow.windowRectTransform` 在 prefab 里指向
+  `Window/ContentRoot/Content/Text`，其下只有名字与正文（及其描边层）。此前把对话框底板、名字横条和 AUTO 标签也一起抖了。
+  **像素影响**：ShakeWindow 期间对话框底板、名字横条、AUTO 标签保持不动。
+  ShakeWindow now moves only the name and words, as the prefab does.
 
 ## 0.1.0（2026-09-25）
 

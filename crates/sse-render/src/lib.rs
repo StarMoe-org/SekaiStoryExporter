@@ -331,19 +331,16 @@ impl Renderer {
         }
         if let Some(t) = &frame.talk {
             if self.native.has_window() {
-                let first = plan.ui.len();
                 let auto_w = self.name_font.preferred_width(
                     "AUTO",
                     native_ui::layout::AUTO_TEXT_SIZE,
                     native_ui::layout::AUTO_TEXT_SPACING,
                 );
+                // ShakeWindow moves `windowRectTransform`, which the prefab points at
+                // `Window/ContentRoot/Content/Text`: only the name and words layers (shaken in
+                // `text_canvas`). The window, name bar and AUTO signal stay put.
                 self.native
                     .talk(&mut plan.ui, k, t.window_alpha, t.auto_time, auto_w);
-                // ShakeWindow moves `windowRectTransform` (the window, name and words)
-                let [wx, wy] = frame.window_shake;
-                for q in &mut plan.ui[first..] {
-                    q.translate(wx * k, -wy * k);
-                }
             } else if let Some(img) = &self.dialog_overlay {
                 plan.ui.push(gpu::QuadDraw::image(
                     img.id,
