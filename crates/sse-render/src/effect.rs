@@ -730,6 +730,8 @@ pub struct EffectInstance {
     time: f32,
     stopped_at: Option<f32>,
     stop_wait: f32,
+    /// Canvas size of the last draw (world-space emitters need the layout while stepping).
+    canvas: std::cell::Cell<[f32; 2]>,
     pub finished: bool,
     dt: f32,
 }
@@ -778,6 +780,7 @@ impl EffectInstance {
             time: 0.0,
             stopped_at: None,
             stop_wait: 0.0,
+            canvas: std::cell::Cell::new([1920.0, 1080.0]),
             finished: false,
             dt,
         };
@@ -865,6 +868,22 @@ impl EffectInstance {
         let before: Vec<bool> = (0..self.prefab.nodes.len())
             .map(|i| self.effective_active(i))
             .collect();
+        // world simulation space: tell those systems where their emitter is now
+        if self.prefab.systems.iter().any(|d| d.world_space) {
+            let canvas = self.canvas.get();
+            let (world, _) = self.layout(&Parent {
+                matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                rect: [-canvas[0] * 0.5, -canvas[1] * 0.5, canvas[0], canvas[1]],
+            });
+            let wu = canvas[1] * 0.5;
+            for (i, node) in self.prefab.nodes.iter().enumerate() {
+                if let Some((s, _)) = node.system
+                    && self.prefab.systems[s].world_space
+                {
+                    self.systems[s].emitter = [world[i][2] / wu, world[i][5] / wu, 0.0];
+                }
+            }
+        }
         let mut fired = Vec::new();
         if let (Some(play), Some(a)) = (self.anim.as_mut(), self.prefab.animator.as_ref()) {
             for (state, t0, t1) in advance(play, a, dt) {
@@ -1052,6 +1071,7 @@ impl EffectInstance {
         if self.finished {
             return Vec::new();
         }
+        self.canvas.set(canvas);
         let (world, rects) = self.layout(parent);
         let wu = canvas[1] * 0.5; // canvas pixels per scenario-camera world unit
         let mut out: Vec<(i32, f32, usize, EffectQuad)> = Vec::new();
@@ -1122,8 +1142,13 @@ impl EffectInstance {
             }
             if let Some((si, mat)) = &node.system {
                 let def = &self.prefab.systems[*si];
-                // `ScalingMode.Local`: position from the hierarchy, the system's own scale only
-                let origin = [w[2], w[5]];
+                // `ScalingMode.Local`: position from the hierarchy, the system's own scale only;
+                // world-space particles carry their emission point, relative to the parent
+                let origin = if def.world_space {
+                    [parent.matrix[2], parent.matrix[5]]
+                } else {
+                    [w[2], w[5]]
+                };
                 let (sx, sy) = (self.scale[i][0], self.scale[i][1]);
                 let tex = mat.as_ref().and_then(|m| m.tex.clone());
                 let blend = mat.as_ref().map_or(Blend::Alpha, |m| m.blend);
@@ -1136,7 +1161,7 @@ impl EffectInstance {
                     || q[1].abs() > 1e-4
                     || q[2].abs() > 1e-4
                     || parent_angle.abs() > 1e-6;
-                let rot = turned.then(|| {
+                let rot = (turned && !def.world_space).then(|| {
                     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
                     let m = [
                         [

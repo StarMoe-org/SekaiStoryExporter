@@ -299,6 +299,8 @@ pub struct SystemDef {
     pub mesh: Option<std::sync::Arc<Mesh>>,
     /// `SubModule` Birth sub-emitters: their `ParticleSystem` path ids.
     pub sub_birth: Vec<i64>,
+    /// `simulationSpace` World: particles stay where they were emitted.
+    pub world_space: bool,
     noise: Option<(Curve, f32, bool)>,
     /// tiles x, tiles y, frame over time, start frame, cycles, single row
     sheet: Option<(u32, u32, Curve, Curve, f32, Option<u32>)>,
@@ -426,6 +428,7 @@ impl SystemDef {
                     ]
                 }),
             mesh: None,
+            world_space: ps["moveWithTransform"].as_i64() == Some(1),
             sub_birth: if bv(&ps["SubModule"], "enabled") {
                 ps["SubModule"]["subEmitters"]
                     .as_array()
@@ -674,6 +677,9 @@ pub struct SystemState {
     pub sub_only: bool,
     /// Birth sub-emitter sources: one per live parent particle.
     subs: Vec<SubSource>,
+    /// World simulation space: the emitter's current position (world units, in the effect's
+    /// frame), added to new particles.
+    pub emitter: [f32; 3],
 }
 
 /// A Birth sub-emitter instance riding on a parent particle (`SubModule`, type Birth): the
@@ -745,6 +751,7 @@ impl SystemState {
             fired: Vec::new(),
             sub_only: false,
             subs: Vec::new(),
+            emitter: [0.0; 3],
         }
     }
 
@@ -912,7 +919,12 @@ impl SystemState {
     }
 
     fn spawn(&mut self, def: &SystemDef, sys_t: f32) {
-        self.spawn_at(def, sys_t, [0.0; 3]);
+        let origin = if def.world_space {
+            self.emitter
+        } else {
+            [0.0; 3]
+        };
+        self.spawn_at(def, sys_t, origin);
     }
 
     fn spawn_at(&mut self, def: &SystemDef, sys_t: f32, origin: [f32; 3]) {
