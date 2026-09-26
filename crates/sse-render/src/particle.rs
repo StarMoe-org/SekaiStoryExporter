@@ -272,6 +272,19 @@ pub struct Shape {
     pub sprite_size: Option<[f32; 2]>,
 }
 
+/// `TrailModule` in Particles mode: a ribbon through each particle's recent positions.
+#[derive(Debug, Clone)]
+struct TrailDef {
+    /// Fraction of the particle's lifetime a trail point lives.
+    lifetime: Curve,
+    min_distance: f32,
+    width: Curve,
+    size_affects_width: bool,
+    inherit_color: bool,
+    color_over_trail: Option<ColorSpec>,
+    color_over_lifetime: Option<ColorSpec>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SystemDef {
     pub duration: f32,
@@ -310,6 +323,8 @@ pub struct SystemDef {
     size_by_speed: Option<(Curve, Option<Curve>, [f32; 2])>,
     /// `RotationBySpeedModule`: (z curve, speed range) — angular velocity by speed.
     rotation_by_speed: Option<(Curve, [f32; 2])>,
+    /// `TrailModule` (Particles mode).
+    trail: Option<TrailDef>,
     noise: Option<(Curve, f32, bool)>,
     /// tiles x, tiles y, frame over time, start frame, cycles, single row
     sheet: Option<(u32, u32, Curve, Curve, f32, Option<u32>)>,
@@ -448,6 +463,24 @@ impl SystemDef {
                 }),
             mesh: None,
             world_space: ps["moveWithTransform"].as_i64() == Some(1),
+            trail: (on("TrailModule") && ps["TrailModule"]["mode"].as_i64().unwrap_or(0) == 0)
+                .then(|| {
+                    let t = &ps["TrailModule"];
+                    let color = |k: &str| {
+                        (t[k]["minMaxState"].as_i64().unwrap_or(0) != 0
+                            || t[k]["maxColor"]["r"].is_number())
+                        .then(|| ColorSpec::parse(&t[k]))
+                    };
+                    TrailDef {
+                        lifetime: Curve::parse(&t["lifetime"]),
+                        min_distance: fv(t, "minVertexDistance"),
+                        width: Curve::parse(&t["widthOverTrail"]),
+                        size_affects_width: bv(t, "sizeAffectsWidth"),
+                        inherit_color: bv(t, "inheritParticleColor"),
+                        color_over_trail: color("colorOverTrail"),
+                        color_over_lifetime: color("colorOverLifetime"),
+                    }
+                }),
             size_by_speed: on("SizeBySpeedModule").then(|| {
                 let m = &ps["SizeBySpeedModule"];
                 let y = bv(m, "separateAxes").then(|| Curve::parse(&m["y"]));
@@ -692,6 +725,8 @@ struct Particle {
     rot: f32,
     rot_xy: [f32; 2],
     color: [f32; 4],
+    /// Trail points: (position, particle age when recorded), oldest first.
+    trail: Vec<([f32; 3], f32)>,
     /// Fixed per-particle randoms for curves in "random between" modes.
     rnd: [f32; 8],
     seed: u32,
@@ -1005,6 +1040,7 @@ impl SystemState {
             rot,
             rot_xy,
             color,
+            trail: Vec::new(),
             rnd,
             seed,
         });
@@ -1059,6 +1095,18 @@ impl SystemState {
             for i in 0..3 {
                 p.pos[i] += v[i] * dt;
             }
+            if let Some(tr) = &def.trail {
+                let keep = tr.lifetime.eval(p.rnd[3], t) * p.life;
+                let far = p.trail.last().is_none_or(|(q, _)| {
+                    let d = [p.pos[0] - q[0], p.pos[1] - q[1], p.pos[2] - q[2]];
+                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() >= tr.min_distance
+                });
+                if far {
+                    p.trail.push((p.pos, p.age));
+                }
+                let age = p.age;
+                p.trail.retain(|(_, a)| age - a <= keep);
+            }
             p.cur_vel = v;
             if let Some(w) = &def.rotation_ol {
                 p.rot += w.eval(p.rnd[7], t) * dt;
@@ -1078,6 +1126,72 @@ impl SystemState {
 
     /// Quads in the emitter's local frame (world units): corners (−,−) (+,−) (+,+) (−,+),
     /// UV rect (u0, v0, u1, v1 with v up) and colour. `stretch` directions are in local space.
+    /// Trail ribbons (Particles mode) as quads, one per segment: u runs along the trail
+    /// (Stretch texture mode, head 0 → tail 1), v across it.
+    pub fn trail_quads(&self, def: &SystemDef, rot: Option<[[f32; 3]; 3]>) -> Vec<Quad> {
+        let Some(tr) = &def.trail else {
+            return Vec::new();
+        };
+        let turn = |v: [f32; 3]| match rot {
+            Some(m) => [
+                m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+                m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+            ],
+            None => [v[0], v[1]],
+        };
+        let mut out = Vec::new();
+        for p in &self.particles {
+            let t = (p.age / p.life).clamp(0.0, 1.0);
+            // head first: the particle, then its recorded points newest → oldest
+            let mut pts: Vec<[f32; 2]> = vec![turn(p.pos)];
+            pts.extend(p.trail.iter().rev().map(|(q, _)| turn(*q)));
+            pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6);
+            if pts.len() < 2 {
+                continue;
+            }
+            let mut base = if tr.inherit_color { p.color } else { [1.0; 4] };
+            if let Some(c) = &tr.color_over_lifetime {
+                let k = c.eval(p.rnd[0], t);
+                for i in 0..4 {
+                    base[i] *= k[i];
+                }
+            }
+            let size = if tr.size_affects_width { p.size[0] } else { 1.0 };
+            let n = (pts.len() - 1) as f32;
+            let width = |u: f32| tr.width.eval(p.rnd[2], u) * size;
+            let color = |u: f32| {
+                let mut c = base;
+                if let Some(ct) = &tr.color_over_trail {
+                    let k = ct.eval(p.rnd[0], u);
+                    for i in 0..4 {
+                        c[i] *= k[i];
+                    }
+                }
+                c
+            };
+            for i in 0..pts.len() - 1 {
+                let (a, b) = (pts[i], pts[i + 1]);
+                let (ua, ub) = (i as f32 / n, (i + 1) as f32 / n);
+                let d = [b[0] - a[0], b[1] - a[1]];
+                let l = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-6);
+                let nrm = [-d[1] / l, d[0] / l];
+                let (wa, wb) = (width(ua) * 0.5, width(ub) * 0.5);
+                out.push((
+                    [
+                        [a[0] - nrm[0] * wa, a[1] - nrm[1] * wa],
+                        [b[0] - nrm[0] * wb, b[1] - nrm[1] * wb],
+                        [b[0] + nrm[0] * wb, b[1] + nrm[1] * wb],
+                        [a[0] + nrm[0] * wa, a[1] + nrm[1] * wa],
+                    ],
+                    [[ua, 0.0], [ub, 0.0], [ub, 1.0], [ua, 1.0]],
+                    color((ua + ub) * 0.5),
+                    0.0,
+                ));
+            }
+        }
+        out
+    }
+
     /// Quads in the emitter's local frame (world units), with the local simulation space turned by `rot` (row-major 3×3)
     /// before the orthographic projection: positions and stretch directions follow the
     /// emitter's rotation, billboard corners keep facing the camera.

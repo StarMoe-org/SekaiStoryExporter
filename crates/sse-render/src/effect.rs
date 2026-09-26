@@ -105,6 +105,8 @@ struct Node {
     canvas_order: Option<i32>,
     /// (system index, material)
     system: Option<(usize, Option<Material>)>,
+    /// `ParticleSystemRenderer.trailMaterialIndex` material (`m_Materials[1]`)
+    trail_material: Option<Material>,
 }
 
 #[derive(Debug, Clone)]
@@ -323,6 +325,7 @@ impl Prefab {
                 sprite_renderer: None,
                 canvas_order: None,
                 system: None,
+                trail_material: None,
             };
             let comps: Vec<i64> = go["m_Component"]
                 .as_array()
@@ -446,6 +449,10 @@ impl Prefab {
                 let mat = r["m_Materials"]
                     .as_array()
                     .and_then(|m| m.first())
+                    .and_then(|m| material(pid(m)));
+                node.trail_material = r["m_Materials"]
+                    .as_array()
+                    .and_then(|m| m.get(1))
                     .and_then(|m| material(pid(m)));
                 node.system = Some((systems.len(), mat));
                 systems.push(def);
@@ -1201,7 +1208,18 @@ impl EffectInstance {
                     }
                     out
                 });
-                for (corners, uvs, color, custom1) in self.systems[*si].quads_rotated(def, rot) {
+                // trails (with their own material) under the particles
+                let trail_tex = node.trail_material.as_ref().and_then(|m| m.tex.clone());
+                let trail_blend = node.trail_material.as_ref().map_or(Blend::Alpha, |m| m.blend);
+                let trails = self.systems[*si]
+                    .trail_quads(def, rot)
+                    .into_iter()
+                    .map(|q| (q, trail_tex.clone(), trail_blend));
+                let particles = self.systems[*si]
+                    .quads_rotated(def, rot)
+                    .into_iter()
+                    .map(|q| (q, tex.clone(), blend));
+                for ((corners, uvs, color, custom1), tex, blend) in trails.chain(particles) {
                     let blend = match blend {
                         Blend::ByCustom1 if custom1 > 0.5 => Blend::Additive,
                         Blend::ByCustom1 => Blend::Alpha,
