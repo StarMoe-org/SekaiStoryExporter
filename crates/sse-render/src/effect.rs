@@ -413,6 +413,17 @@ impl Prefab {
                 let seed = crc32fast::hash(node.name.as_bytes())
                     ^ (systems.len() as u32).wrapping_mul(0x9E37_79B9);
                 let mut def = SystemDef::parse(ps, r, seed);
+                // Sprite / SpriteRenderer emission shapes: the sprite's size in units
+                if matches!(def.shape_kind(), 19 | 20) {
+                    let sh = &ps["ShapeModule"];
+                    let sp = if def.shape_kind() == 19 {
+                        pid(&sh["m_Sprite"])
+                    } else {
+                        tree(pid(&sh["m_SpriteRenderer"])).map_or(0, |r| pid(&r["m_Sprite"]))
+                    };
+                    def.shape.sprite_size =
+                        sprite(sp).map(|s| [s.size[0] / s.ppu, s.size[1] / s.ppu]);
+                }
                 // Mesh render mode: the renderer's mesh (built-in Quad 10210 / Cube 10202, or
                 // one serialized in this bundle); others fall back to the quad
                 if def.render_mode == crate::particle::RenderMode::Mesh {

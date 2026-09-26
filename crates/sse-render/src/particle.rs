@@ -252,7 +252,7 @@ struct Burst {
 }
 
 #[derive(Debug, Clone)]
-struct Shape {
+pub struct Shape {
     enabled: bool,
     kind: i64,
     radius: f32,
@@ -265,6 +265,11 @@ struct Shape {
     scale: [f32; 3],
     random_direction: f32,
     spherical_direction: f32,
+    /// Donut (17): the tube radius.
+    donut_radius: f32,
+    /// Sprite / SpriteRenderer (19 / 20): the sprite's size in units (set by the prefab loader;
+    /// emission is uniform over its rect, approximation of its mesh).
+    pub sprite_size: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Clone)]
@@ -287,7 +292,7 @@ pub struct SystemDef {
     max_particles: usize,
     rate: Curve,
     bursts: Vec<Burst>,
-    shape: Shape,
+    pub shape: Shape,
     velocity: Option<[Curve; 4]>,
     clamp: Option<(Curve, f32)>,
     size_ol: Option<(Curve, Option<Curve>)>,
@@ -301,6 +306,10 @@ pub struct SystemDef {
     pub sub_birth: Vec<i64>,
     /// `simulationSpace` World: particles stay where they were emitted.
     pub world_space: bool,
+    /// `SizeBySpeedModule`: (x curve, y curve when separate, speed range).
+    size_by_speed: Option<(Curve, Option<Curve>, [f32; 2])>,
+    /// `RotationBySpeedModule`: (z curve, speed range) — angular velocity by speed.
+    rotation_by_speed: Option<(Curve, [f32; 2])>,
     noise: Option<(Curve, f32, bool)>,
     /// tiles x, tiles y, frame over time, start frame, cycles, single row
     sheet: Option<(u32, u32, Curve, Curve, f32, Option<u32>)>,
@@ -319,6 +328,14 @@ pub struct SystemDef {
 const CUSTOM1X_STREAM: i64 = 31;
 
 impl SystemDef {
+    pub fn shape_kind(&self) -> i64 {
+        if self.shape.enabled {
+            self.shape.kind
+        } else {
+            -1
+        }
+    }
+
     /// `ParticleShaderSettings.UpdateMode` (on `Awake`): adds the `Custom1X` stream and sets
     /// custom data vector 0 to the constant 1 (`Mode.Additive`) or 0 (`Mode.AlphaBlend`).
     pub fn set_custom1x(&mut self, value: f32) {
@@ -399,6 +416,8 @@ impl SystemDef {
                 scale: v3(&sh["m_Scale"]),
                 random_direction: fv(sh, "randomDirectionAmount"),
                 spherical_direction: fv(sh, "sphericalDirectionAmount"),
+                donut_radius: sh.get("donutRadius").map_or(0.2, f),
+                sprite_size: None,
             },
             velocity: on("VelocityModule").then(|| {
                 let v = &ps["VelocityModule"];
@@ -429,6 +448,22 @@ impl SystemDef {
                 }),
             mesh: None,
             world_space: ps["moveWithTransform"].as_i64() == Some(1),
+            size_by_speed: on("SizeBySpeedModule").then(|| {
+                let m = &ps["SizeBySpeedModule"];
+                let y = bv(m, "separateAxes").then(|| Curve::parse(&m["y"]));
+                (
+                    Curve::parse(&m["curve"]),
+                    y,
+                    [fv(&m["range"], "x"), fv(&m["range"], "y")],
+                )
+            }),
+            rotation_by_speed: on("RotationBySpeedModule").then(|| {
+                let m = &ps["RotationBySpeedModule"];
+                (
+                    Curve::parse(&m["curve"]),
+                    [fv(&m["range"], "x"), fv(&m["range"], "y")],
+                )
+            }),
             sub_birth: if bv(&ps["SubModule"], "enabled") {
                 ps["SubModule"]["subEmitters"]
                     .as_array()
@@ -1028,6 +1063,11 @@ impl SystemState {
             if let Some(w) = &def.rotation_ol {
                 p.rot += w.eval(p.rnd[7], t) * dt;
             }
+            if let Some((w, [lo, hi])) = &def.rotation_by_speed {
+                let sp = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                let k = ((sp - lo) / (hi - lo).max(1e-6)).clamp(0.0, 1.0);
+                p.rot += w.eval(p.rnd[7], k) * dt;
+            }
             if let Some([x, y]) = &def.rotation_ol_xy {
                 p.rot_xy[0] += x.eval(p.rnd[7], t) * dt;
                 p.rot_xy[1] += y.eval(p.rnd[7], t) * dt;
@@ -1071,6 +1111,16 @@ impl SystemState {
             if let Some((x, y)) = &def.size_ol {
                 let kx = x.eval(p.rnd[1], t);
                 let ky = y.as_ref().map_or(kx, |y| y.eval(p.rnd[1], t));
+                w *= kx;
+                h *= ky;
+                d *= kx;
+            }
+            if let Some((x, y, [lo, hi])) = &def.size_by_speed {
+                let v = p.cur_vel;
+                let sp = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                let k = ((sp - lo) / (hi - lo).max(1e-6)).clamp(0.0, 1.0);
+                let kx = x.eval(p.rnd[1], k);
+                let ky = y.as_ref().map_or(kx, |y| y.eval(p.rnd[1], k));
                 w *= kx;
                 h *= ky;
                 d *= kx;
@@ -1262,6 +1312,29 @@ fn shape_sample(s: &Shape, r: &mut u32) -> ([f32; 3], [f32; 3]) {
             };
             let (ca, sa) = (cosf(a), sinf(a));
             ([ca * rr, sa * rr, 0.0], [ca, sa, 0.0])
+        }
+        // donut: a torus around the XY ring, emitting away from the tube's centre line
+        17 => {
+            let a = unit(r) * s.arc.to_radians();
+            let b = unit(r) * std::f32::consts::TAU;
+            let tube = s.donut_radius * shell(r, s.radius_thickness).sqrt();
+            let (ca, sa, cb, sb) = (cosf(a), sinf(a), cosf(b), sinf(b));
+            let off = [cb * ca * tube, cb * sa * tube, sb * tube];
+            let l = (off[0] * off[0] + off[1] * off[1] + off[2] * off[2])
+                .sqrt()
+                .max(1e-6);
+            (
+                [ca * s.radius + off[0], sa * s.radius + off[1], off[2]],
+                [off[0] / l, off[1] / l, off[2] / l],
+            )
+        }
+        // sprite: uniform over the sprite's rect, along its normal
+        19 | 20 => {
+            let [w, h] = s.sprite_size.unwrap_or([1.0, 1.0]);
+            (
+                [(unit(r) - 0.5) * w, (unit(r) - 0.5) * h, 0.0],
+                [0.0, 0.0, 1.0],
+            )
         }
         // single-sided edge: a line along x, emitting along +y
         12 => (
