@@ -238,8 +238,13 @@ impl Renderer {
             } else {
                 1.0
             };
+            let q = gpu::QuadDraw::image(id, bg_rect, [1.0, 1.0, 1.0, a]);
             plan.scene
-                .push(gpu::QuadDraw::image(id, bg_rect, [1.0, 1.0, 1.0, a]));
+                .push(match (frame.background.dolly, frame.background.blur) {
+                    (Some([sampling, distortion]), _) => q.with_dolly(sampling, distortion),
+                    (None, true) => q.with_blur(consts::UI_GAUSSIAN_BLUR_SAMPLING_DISTANCE),
+                    (None, false) => q,
+                });
         }
 
         // 2. characters (in order, each composited right after its RT render)
@@ -264,19 +269,32 @@ impl Renderer {
                     // no texture: a sample above every `_Line` adds nothing
                     scan: self.scan.as_ref().map_or(1.0, |s| s.sample(h.time)),
                 }),
+                blur: c.blur,
             });
         }
 
-        // ShakeScreen moves `ScenarioRoot` (background, characters) in canvas pixels, +y up
-        let [sx, sy] = frame.scenario_shake;
-        if sx != 0.0 || sy != 0.0 {
-            let (ox, oy) = (sx * k, -sy * k);
+        // effect 45 scales `backgroundImage.parent` (full screen, centre pivot)
+        let bs = frame.background.scale;
+        if bs != 1.0 {
+            let xf = gpu::ScreenXf {
+                center: [w * 0.5, h * 0.5],
+                zoom: bs,
+                offset: [0.0, 0.0],
+            };
             for q in &mut plan.scene {
-                q.translate(ox, oy);
+                q.transform(&xf);
+            }
+        }
+        // `ScenarioRoot` (background, characters, effects) on screen: ShakeScreen moves it
+        // (canvas pixels, +y up), CameraZoom scales it about the centre and CameraMove moves
+        // the studio camera the other way
+        let xf = root_xf(frame, k, [w, h]);
+        if !xf.is_identity() {
+            for q in &mut plan.scene {
+                q.transform(&xf);
             }
             for c in &mut plan.characters {
-                c.rect[0] += ox;
-                c.rect[1] += oy;
+                c.rect = xf.rect(c.rect);
             }
         }
 
@@ -297,7 +315,7 @@ impl Renderer {
                 plan.particles.push(gpu::ParticleDraw {
                     additive: mat == fx::Material::Additive,
                     image: atlas.id,
-                    corners,
+                    corners: corners.map(|p| xf.point(p)),
                     uvs: [
                         [u0, 1.0 - v0],
                         [u1, 1.0 - v0],
@@ -305,6 +323,7 @@ impl Renderer {
                         [u0, 1.0 - v1],
                     ],
                     color,
+                    mask: None,
                 });
             }
         }
@@ -365,6 +384,11 @@ impl Renderer {
             self.native.menu(&mut plan.ui, k, frame.menu_alpha);
         }
         native_ui::cinemascope(&mut plan.ui_top, k, w, h, frame.cinemascope);
+        // `AnswerChoiceDialog` on the dialog layer (above the scenario UI)
+        let choice_rects = frame.choice.as_ref().map(|c| {
+            self.native
+                .choice(&mut plan.ui_top, k, [w, h], c.options.len(), c.scale)
+        });
         let telop_text = frame
             .telop
             .as_ref()
@@ -372,7 +396,7 @@ impl Renderer {
         if let Some(p) = &frame.place_info {
             self.native.place_info(&mut plan.ui, k, p.x);
         }
-        plan.text = Some(self.text_canvas(frame, k, telop_text)?);
+        plan.text = Some(self.text_canvas(frame, k, telop_text, choice_rects.as_deref())?);
         if let Some(p) = frame.side_fade {
             self.side_fade(&mut plan.cover, k, content, p);
         }
@@ -445,12 +469,9 @@ impl Renderer {
             }
         }
         self.effects.retain(|k, _| keep.contains(k));
-        let [sx, sy] = frame.scenario_shake;
         let to_screen = |p: [f32; 2]| {
-            [
-                screen[0] * 0.5 + (p[0] + sx) * k,
-                screen[1] * 0.5 - (p[1] + sy) * k,
-            ]
+            let q = sse_params::CameraView::apply(frame.camera.as_ref(), frame.scenario_shake, p);
+            [screen[0] * 0.5 + q[0] * k, screen[1] * 0.5 - q[1] * k]
         };
         let attached: std::collections::BTreeSet<_> = frame
             .effects
@@ -489,14 +510,23 @@ impl Renderer {
                 Some(t) => self.image(t)?,
                 None => self.white.id,
             };
-            // `EffectQuad` UVs are image-space (v down); ParticleDraw takes per-corner UVs
-            let [u0, v0, u1, v1] = q.uv;
+            let mask = match &q.mask {
+                Some(m) => Some(gpu::MaskDraw {
+                    image: self.image(&m.tex)?,
+                    corners: m.corners.map(to_screen),
+                    uv: m.uv,
+                    cutoff: m.cutoff,
+                    outside: m.outside,
+                }),
+                None => None,
+            };
             let d = gpu::ParticleDraw {
                 additive: q.blend == effect::Blend::Additive,
                 image,
                 corners: q.corners.map(to_screen),
-                uvs: [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+                uvs: q.uvs,
                 color: q.color,
+                mask,
             };
             if q.order < SCENARIO_LAYER_ORDER {
                 plan.effects_back.push(d);
@@ -580,9 +610,10 @@ impl Renderer {
         frame: &FrameState,
         k: f32,
         telop: Option<(f32, f32)>,
+        choice: Option<&[[f32; 4]]>,
     ) -> Result<gpu::ImageId, RenderError> {
         let key = format!(
-            "{:?}|{:?}|{:?}|{:?}|{}",
+            "{:?}|{:?}|{:?}|{:?}|{}|{:?}",
             frame.talk.as_ref().map(|t| {
                 let s = frame.window_shake;
                 (
@@ -611,7 +642,11 @@ impl Renderer {
                 ""
             } else {
                 m.name.as_str()
-            })
+            }),
+            frame
+                .choice
+                .as_ref()
+                .map(|c| (&c.options, (c.scale * 256.0) as u32))
         );
         if self.text_key.as_deref() == Some(key.as_str()) {
             return Ok(self.gpu.text_image());
@@ -762,6 +797,39 @@ impl Renderer {
                 &|i| (progress - i as f32).clamp(0.0, 1.0),
             );
         }
+        if let (Some(c), Some(rects)) = (&frame.choice, choice) {
+            use native_ui::layout as l;
+            let style = sse_text::Style {
+                size: l::ANSWER_TEXT_SIZE * c.scale,
+                min_size: 1.0,
+                auto_size: true,
+                line_spacing: 0.0,
+                color: l::ANSWER_TEXT_COLOR,
+                outline: None,
+                underlay: None,
+                char_spacing: 0.0,
+            };
+            for (text, r) in c.options.iter().zip(rects) {
+                let inset = l::ANSWER_TEXT_INSET * c.scale * k;
+                sse_text::draw(
+                    &mut canvas,
+                    &self.name_font,
+                    text,
+                    u32::MAX,
+                    sse_text::Frame {
+                        x: r[0] + inset,
+                        y: r[1],
+                        width: (r[2] - inset * 2.0) / k,
+                        height: r[3] / k,
+                        scale: k,
+                        align: 0.5,
+                        valign: 0.5,
+                    },
+                    &style,
+                    1.0,
+                );
+            }
+        }
         if let Some(m) = frame.movie.as_ref().filter(|m| m.file.is_none()) {
             let msg = format!("[movie: {}]", m.name);
             sse_text::draw(
@@ -832,6 +900,17 @@ impl Renderer {
 }
 
 /// `ScenarioPlayer.movieResolution` (2338, 1080) in target pixels.
+/// `scenarioRoot`'s placement on screen (see [`gpu::ScreenXf`]).
+fn root_xf(frame: &FrameState, k: f32, screen: [f32; 2]) -> gpu::ScreenXf {
+    let [sx, sy] = frame.scenario_shake;
+    let (zoom, cx, cy) = frame.camera.map_or((1.0, 0.0, 0.0), |c| (c.zoom, c.x, c.y));
+    gpu::ScreenXf {
+        center: [screen[0] * 0.5, screen[1] * 0.5],
+        zoom,
+        offset: [(sx - cx) * k, -(sy - cy) * k],
+    }
+}
+
 fn movie_rect(cfg: &RenderConfig) -> (u32, u32) {
     let k = cfg.ui_scale();
     let [w, h] = consts::MOVIE_RESOLUTION;

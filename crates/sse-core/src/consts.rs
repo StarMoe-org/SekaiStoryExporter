@@ -207,3 +207,19 @@ pub const HOLOGRAM_ALPHA_RANGE: [f32; 2] = [0.85, 0.9];
 pub const HOLOGRAM_COUNTDOWN_RANGE: [f32; 2] = [0.0, 0.5];
 /// `Setup`: countdown = `Random.Range(0, 0.2) + 0.05`.
 pub const HOLOGRAM_FIRST_COUNTDOWN: [f32; 2] = [0.05, 0.25];
+
+// ---- background blur -------------------------------------------------------------------
+
+/// `Resources/Materials/UI/UIGaussianBlur._SamplingDistance` (JP 6.8.1 `resources.assets|330`).
+pub const UI_GAUSSIAN_BLUR_SAMPLING_DISTANCE: f32 = 2.8;
+
+// ---- simple selectable (effect 23) -----------------------------------------------------
+
+/// `AnswerChoiceDialog` (`DialogBase.OpenAnimation` / `CloseAnimation`): `windowObject`
+/// scales 0 → 1 / 1 → 0 over this, ease Linear.
+pub const DIALOG_SCALE_DURATION: f32 = 0.125;
+/// `onFinishAnswerDialog`: `WaitDelay(0.5)` after the answer, then `FinishSnippet`.
+pub const ANSWER_FINISH_DELAY: f32 = 0.5;
+/// Not game data: the export answers (the first choice) this long after the dialog opens,
+/// standing in for the player's tap.
+pub const EXPORT_CHOICE_WAIT: f32 = 1.5;

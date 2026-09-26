@@ -32,6 +32,33 @@ pub struct Image {
 }
 
 /// A screen-space textured (or solid) quad in target pixels.
+/// `scenarioRoot` on screen in target pixels: uniform scale `zoom` about `center`, then
+/// `offset` (the root's shake minus the studio camera's position).
+#[derive(Debug, Clone, Copy)]
+pub struct ScreenXf {
+    pub center: [f32; 2],
+    pub zoom: f32,
+    pub offset: [f32; 2],
+}
+
+impl ScreenXf {
+    pub fn point(&self, p: [f32; 2]) -> [f32; 2] {
+        [
+            self.center[0] + self.zoom * (p[0] - self.center[0]) + self.offset[0],
+            self.center[1] + self.zoom * (p[1] - self.center[1]) + self.offset[1],
+        ]
+    }
+
+    pub fn rect(&self, r: [f32; 4]) -> [f32; 4] {
+        let [x, y] = self.point([r[0], r[1]]);
+        [x, y, r[2] * self.zoom, r[3] * self.zoom]
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.zoom == 1.0 && self.offset == [0.0, 0.0]
+    }
+}
+
 pub struct QuadDraw {
     image: Option<ImageId>,
     rect: [f32; 4],
@@ -39,12 +66,28 @@ pub struct QuadDraw {
     uv: [f32; 4],
     color: [f32; 4],
     premultiplied: bool,
+    /// `Sekai/UI/UIGaussianBlur` with this `_SamplingDistance` (texels).
+    blur: Option<f32>,
+    /// `Sekai/UI/UIDollyZoomEffect` with `[_SamplingDistance, _DistortionStrength]`.
+    dolly: Option<[f32; 2]>,
 }
 
 impl QuadDraw {
-    pub fn translate(&mut self, dx: f32, dy: f32) {
-        self.rect[0] += dx;
-        self.rect[1] += dy;
+    /// Draws with the `UIGaussianBlur` material.
+    pub fn with_blur(mut self, sampling_distance: f32) -> Self {
+        self.blur = Some(sampling_distance);
+        self
+    }
+
+    /// Draws with the `UIDollyZoomEffect` material.
+    pub fn with_dolly(mut self, sampling_distance: f32, distortion: f32) -> Self {
+        self.dolly = Some([sampling_distance, distortion]);
+        self
+    }
+
+    /// Applies a [`ScreenXf`] to the rect.
+    pub fn transform(&mut self, xf: &ScreenXf) {
+        self.rect = xf.rect(self.rect);
     }
 
     pub fn image(id: ImageId, rect: [f32; 4], color: [f32; 4]) -> Self {
@@ -54,6 +97,8 @@ impl QuadDraw {
             uv: [0.0, 0.0, 1.0, 1.0],
             color,
             premultiplied: false,
+            blur: None,
+            dolly: None,
         }
     }
     pub fn image_uv(id: ImageId, rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) -> Self {
@@ -63,6 +108,8 @@ impl QuadDraw {
             uv,
             color,
             premultiplied: false,
+            blur: None,
+            dolly: None,
         }
     }
     pub fn solid(rect: [f32; 4], color: [f32; 4]) -> Self {
@@ -72,6 +119,8 @@ impl QuadDraw {
             uv: [0.0, 0.0, 1.0, 1.0],
             color,
             premultiplied: false,
+            blur: None,
+            dolly: None,
         }
     }
 }
@@ -86,6 +135,43 @@ pub struct ParticleDraw {
     pub uvs: [[f32; 2]; 4],
     /// Vertex colour, straight alpha (`startColor × colourOverLifetime`).
     pub color: [f32; 4],
+    /// `SpriteMask` interaction.
+    pub mask: Option<MaskDraw>,
+}
+
+/// A `SpriteMask` a draw interacts with, in target pixels.
+pub struct MaskDraw {
+    pub image: ImageId,
+    /// Corners (−,−) (+,−) (+,+) (−,+) of the mask sprite.
+    pub corners: [[f32; 2]; 4],
+    /// The sprite's texture rect u0, v0, u1, v1 (v down).
+    pub uv: [f32; 4],
+    pub cutoff: f32,
+    /// `VisibleOutsideMask` (else `VisibleInsideMask`).
+    pub outside: bool,
+}
+
+impl MaskDraw {
+    /// (mask0, mask1): the corner (−,−) and the inverse of the basis ((+,−) − (−,−),
+    /// (−,+) − (−,−)), mapping a pixel to the sprite's (s, t) in [0, 1]².
+    fn params(&self) -> ([f32; 4], [f32; 4]) {
+        let c = self.corners;
+        let (a, b) = (
+            [c[1][0] - c[0][0], c[1][1] - c[0][1]],
+            [c[3][0] - c[0][0], c[3][1] - c[0][1]],
+        );
+        let det = a[0] * b[1] - b[0] * a[1];
+        let det = if det.abs() < 1e-9 { 1e-9 } else { det };
+        (
+            [c[0][0], c[0][1], b[1] / det, -b[0] / det],
+            [
+                -a[1] / det,
+                a[0] / det,
+                if self.outside { 2.0 } else { 1.0 },
+                self.cutoff,
+            ],
+        )
+    }
 }
 
 pub struct CharacterDraw {
@@ -97,6 +183,8 @@ pub struct CharacterDraw {
     pub rect: [f32; 4],
     /// `Live2DHologram` material on the `RawImage` instead of `UI/Default`.
     pub hologram: Option<Hologram>,
+    /// `Live2DBlur` material with this `_Blur`.
+    pub blur: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -152,6 +240,12 @@ struct QuadGpu {
     target: [f32; 4],
     /// mode 2 (hologram): `_Line`, `_SubColor.a`, `_SubTex.r`
     extra: [f32; 4],
+    /// Sprite mask (particles): origin corner xy, inverse basis row 0
+    mask0: [f32; 4],
+    /// inverse basis row 1, interaction (1 inside, 2 outside, 0 none), alpha cutoff
+    mask1: [f32; 4],
+    /// mask sprite's texture rect u0, v0, u1, v1 (v down)
+    mask2: [f32; 4],
 }
 
 #[repr(C)]
@@ -336,6 +430,7 @@ impl Gpu {
                 },
                 tex_entry(1),
                 smp_entry(2),
+                tex_entry(3),
             ],
         });
         let cubism_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -750,6 +845,16 @@ impl Gpu {
     }
 
     fn quad_bind(&mut self, image: ImageId, q: QuadGpu) -> wgpu::BindGroup {
+        self.quad_bind_masked(image, q, None)
+    }
+
+    fn quad_bind_masked(
+        &mut self,
+        image: ImageId,
+        q: QuadGpu,
+        mask: Option<ImageId>,
+    ) -> wgpu::BindGroup {
+        let mask = mask.unwrap_or(self.white);
         use wgpu::util::DeviceExt;
         let buf = self
             .device
@@ -773,6 +878,10 @@ impl Gpu {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.images[mask.0].view),
                 },
             ],
         });
@@ -805,6 +914,10 @@ impl Gpu {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.images[self.white.0].view),
+                },
             ],
         });
         self.uniforms.push(buf);
@@ -823,8 +936,24 @@ impl Gpu {
                         rect: q.rect,
                         uv: q.uv,
                         color: q.color,
-                        target: [w, h, if q.premultiplied { 1.0 } else { 0.0 }, 0.0],
-                        extra: [0.0; 4],
+                        target: [
+                            w,
+                            h,
+                            match (q.dolly, q.blur, q.premultiplied) {
+                                (Some(_), _, _) => 5.0,
+                                (None, Some(_), _) => 3.0,
+                                (None, None, true) => 1.0,
+                                (None, None, false) => 0.0,
+                            },
+                            0.0,
+                        ],
+                        extra: match (q.dolly, q.blur) {
+                            (Some([sd, dist]), _) => [sd, dist, 0.0, 0.0],
+                            (None, b) => [b.unwrap_or(0.0), 0.0, 0.0, 0.0],
+                        },
+                        mask0: [0.0; 4],
+                        mask1: [0.0; 4],
+                        mask2: [0.0; 4],
                     },
                 )
             })
@@ -874,8 +1003,26 @@ impl Gpu {
             color: [1.0; 4],
             target: [w, h, 0.0, 0.0],
             extra: [0.0; 4],
+            mask0: [0.0; 4],
+            mask1: [0.0; 4],
+            mask2: [0.0; 4],
         };
-        let bgs: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.quad_bind(d.image, q)).collect();
+        let bgs: Vec<wgpu::BindGroup> = draws
+            .iter()
+            .map(|d| match &d.mask {
+                Some(m) => {
+                    let (mask0, mask1) = m.params();
+                    let q = QuadGpu {
+                        mask0,
+                        mask1,
+                        mask2: m.uv,
+                        ..q
+                    };
+                    self.quad_bind_masked(d.image, q, Some(m.image))
+                }
+                None => self.quad_bind(d.image, q),
+            })
+            .collect();
         let mut rp = Self::pass(enc, target, None);
         rp.set_vertex_buffer(0, vbuf.slice(..));
         for (i, d) in draws.iter().enumerate() {
@@ -1106,9 +1253,10 @@ impl Gpu {
             let mut enc = self.device.create_command_encoder(&Default::default());
             self.character(models, c, &mut enc);
             let rt_view = self.rt.view.clone();
-            let (mode, extra) = match c.hologram {
-                Some(g) => (2.0, [g.line, g.alpha, g.scan, 0.0]),
-                None => (0.0, [0.0; 4]),
+            let (mode, extra) = match (c.hologram, c.blur) {
+                (Some(g), _) => (2.0, [g.line, g.alpha, g.scan, 0.0]),
+                (None, Some(b)) => (4.0, [b, 0.0, 0.0, 0.0]),
+                (None, None) => (0.0, [0.0; 4]),
             };
             let q = QuadGpu {
                 rect: c.rect,
@@ -1116,6 +1264,9 @@ impl Gpu {
                 color: [c.color[0], c.color[1], c.color[2], c.opacity],
                 target: [w, h, mode, 0.0],
                 extra,
+                mask0: [0.0; 4],
+                mask1: [0.0; 4],
+                mask2: [0.0; 4],
             };
             let bg = self.view_bind(&rt_view, bytemuck::bytes_of(&q));
             self.draw_quads(&mut enc, &self.scene.view, &[bg], None);
@@ -1208,6 +1359,8 @@ impl Gpu {
                 uv: [0.0, 0.0, 1.0, 1.0],
                 color: [1.0; 4],
                 premultiplied: true,
+                blur: None,
+                dolly: None,
             }]));
         }
         ui.extend(self.quads(&plan.cover));

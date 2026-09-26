@@ -692,7 +692,14 @@ impl<'a> Scheduler<'a> {
         let InstrKind::Layout(l) = &instrs[pos].kind else {
             unreachable!("layout_body on non-layout")
         };
-        // The motion change comes before the type branch (see `Layout::motion`).
+        // `CheckAndChangeCostume`, then the motion change, before the type branch (see
+        // `Layout::costume` / `Layout::motion`).
+        if let (Some(costume), Some(c)) = (&l.costume, self.chars.get_mut(&l.character))
+            && c.costume.as_deref() != Some(costume.as_str())
+        {
+            c.costume = Some(costume.clone());
+            c.shown = false;
+        }
         if l.motion.is_some() {
             self.set_body(l.character, l.motion.as_deref(), frame);
         }
@@ -717,10 +724,8 @@ impl<'a> Scheduler<'a> {
                     then: Next::ReleaseBusy(l.character),
                 };
             }
-            LayoutOp::Shake { .. } => {
-                self.note_once("layout Shake duration not reversed; finishes immediately");
-                0.0
-            }
+            // `OnFinishShakeCharacter` → `FinishSnippet` when the shake tween completes
+            LayoutOp::Shake { duration, .. } => *duration,
             LayoutOp::Depth { .. } => 0.0,
         };
         Wait::Until {
@@ -853,6 +858,11 @@ impl<'a> Scheduler<'a> {
         match &e.op {
             Fade { .. } | ChangeBackground { .. } | Blur { .. } | SideFade { .. } => Some(d),
             CameraMove { .. } | CameraZoom { .. } => Some(d),
+            // `ShowSimpleSelectable`: with two or more options the dialog waits for the player
+            // (the export answers after `EXPORT_CHOICE_WAIT`), then `WaitDelay(0.5)`
+            SimpleSelectable { options } if options.len() > 1 => {
+                Some(consts::EXPORT_CHOICE_WAIT + consts::ANSWER_FINISH_DELAY)
+            }
             Telop { .. } => Some(consts::TELOP_ANIM_CLIP_LENGTH * 2.0 + consts::TELOP_AUTO_HOLD)
                 .map(|_| {
                     // frame-accurate: two clip plays + the hold loop, each rounded separately
@@ -875,12 +885,6 @@ impl<'a> Scheduler<'a> {
                 None
             }
             _ => None,
-        }
-    }
-
-    fn note_once(&mut self, note: &str) {
-        if !self.notes.iter().any(|n| n == note) {
-            self.notes.push(note.to_owned());
         }
     }
 }

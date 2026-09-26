@@ -21,7 +21,7 @@ use std::path::Path;
 use serde_json::Value;
 use sse_assets::SseMotion;
 use sse_assets::motion::CurveData;
-use sse_core::det_math::{cosf, sinf};
+use sse_core::det_math::{atan2f, cosf, sinf, sqrtf};
 
 use crate::particle::{SystemDef, SystemState};
 
@@ -64,6 +64,10 @@ struct Sprite {
 pub enum Blend {
     Alpha,
     Additive,
+    /// `Sekai/Particles/Additive+AlphaBlend` (Blend One OneMinusSrcAlpha, `rgb × a` out):
+    /// alpha out = `a` when the particle's `Custom1.x ≤ 0.5` (alpha blending), else 0
+    /// (additive). Resolved per particle.
+    ByCustom1,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +105,21 @@ struct Node {
     canvas_order: Option<i32>,
     /// (system index, material)
     system: Option<(usize, Option<Material>)>,
+    /// `ParticleSystemRenderer.trailMaterialIndex` material (`m_Materials[1]`)
+    trail_material: Option<Material>,
+    sprite_mask: Option<SpriteMask>,
+    /// `m_MaskInteraction` of the node's `SpriteRenderer` / `ParticleSystemRenderer`:
+    /// 0 none, 1 visible inside masks, 2 visible outside masks
+    mask_interaction: u8,
+}
+
+/// `SpriteMask`: the sprite's texels passing `alpha ≥ m_MaskAlphaCutoff` mark the mask area
+/// (stencil) for renderers whose sorting order is in (back, front] (custom range) or any.
+#[derive(Debug, Clone)]
+struct SpriteMask {
+    sprite: Sprite,
+    cutoff: f32,
+    range: Option<(i32, i32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +129,16 @@ struct Clip {
     start: f32,
     /// (node, property, curve)
     curves: Vec<(usize, Prop, CurveData)>,
+    /// Animation events `CommandAnimator` handles on the particles: (clip time, event).
+    events: Vec<(f32, ClipEvent)>,
+}
+
+/// `CommandAnimator.OnPlayParticle` / `OnStopParticle`: `transform.Find(path)`'s
+/// `ParticleSystem.Play()` / `Stop()` (with children).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipEvent {
+    PlayParticle(usize),
+    StopParticle(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -121,6 +150,18 @@ enum Prop {
     /// `Transform` localScale / localPosition component (the SSR converter names them)
     Scale(usize),
     Position(usize),
+    /// `localEulerAnglesRaw` component (degrees)
+    Euler(usize),
+    /// `SpriteRenderer.m_Color` component
+    SpriteColor(usize),
+    /// `SpriteRenderer` `material._Color` component
+    SpriteMatColor(usize),
+    /// `ParticleSystem.looping`
+    Looping,
+    /// `EmissionModule.m_Bursts.Array.data[i].countCurve.scalar`
+    BurstCount(usize),
+    /// `InitialModule.startColor.{minColor (true), maxColor}` component
+    StartColor(bool, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +188,8 @@ pub struct Prefab {
     animator: Option<Animator>,
     stop_destroys: bool,
     play_on_enable: bool,
+    /// Birth sub-emitters of each system (system indices).
+    subs: Vec<Vec<usize>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -172,6 +215,9 @@ fn blend_of(mat: &Value, shader_names: &BTreeMap<i64, String>) -> Blend {
     }
     if let Some(n) = shader_names.get(&id) {
         let n = n.to_ascii_lowercase();
+        if n.contains("add + alpha blend") {
+            return Blend::ByCustom1;
+        }
         if n.contains("add") && !n.contains("alpha") {
             return Blend::Additive;
         }
@@ -265,6 +311,8 @@ impl Prefab {
             .ok_or_else(|| EffectError::Load(name.into(), "no root transform".into()))?;
         let mut nodes: Vec<Node> = Vec::new();
         let mut systems = Vec::new();
+        // ParticleSystem path id → system index (sub-emitter references)
+        let mut system_of: BTreeMap<i64, usize> = BTreeMap::new();
         let mut animator_ctrl = None;
         let mut stop_destroys = true;
         let mut play_on_enable = true;
@@ -298,6 +346,9 @@ impl Prefab {
                 sprite_renderer: None,
                 canvas_order: None,
                 system: None,
+                trail_material: None,
+                sprite_mask: None,
+                mask_interaction: 0,
             };
             let comps: Vec<i64> = go["m_Component"]
                 .as_array()
@@ -307,11 +358,34 @@ impl Prefab {
                 .collect();
             let mut ps = None;
             let mut psr = None;
+            let mut shader_settings = None;
             for c in comps {
                 let Some(ct) = tree(c) else { continue };
                 match class(c) {
-                    198 => ps = Some(ct),
-                    199 => psr = Some(ct),
+                    198 => {
+                        ps = Some(ct);
+                        system_of.insert(c, systems.len());
+                    }
+                    199 => {
+                        node.mask_interaction = ct["m_MaskInteraction"].as_i64().unwrap_or(0) as u8;
+                        psr = Some(ct);
+                    }
+                    331 => {
+                        if ct["m_Enabled"].as_i64().unwrap_or(1) != 0
+                            && let Some(s) = sprite(pid(&ct["m_Sprite"]))
+                        {
+                            let custom = ct["m_IsCustomRangeActive"].as_i64().unwrap_or(0) != 0
+                                || ct["m_IsCustomRangeActive"].as_bool() == Some(true);
+                            let order = |k: &str| ct[k].as_i64().unwrap_or(0) as i32;
+                            node.sprite_mask = Some(SpriteMask {
+                                sprite: s,
+                                cutoff: f(&ct["m_MaskAlphaCutoff"]),
+                                range: custom.then(|| {
+                                    (order("m_BackSortingOrder"), order("m_FrontSortingOrder"))
+                                }),
+                            });
+                        }
+                    }
                     223 => {
                         if ct["m_OverrideSorting"].as_bool().unwrap_or(false)
                             || ct["m_OverrideSorting"].as_i64() == Some(1)
@@ -321,6 +395,7 @@ impl Prefab {
                         }
                     }
                     212 => {
+                        node.mask_interaction = ct["m_MaskInteraction"].as_i64().unwrap_or(0) as u8;
                         if ct["m_Enabled"].as_i64().unwrap_or(1) != 0
                             && let Some(s) = sprite(pid(&ct["m_Sprite"]))
                         {
@@ -347,6 +422,27 @@ impl Prefab {
                                     [f(&c4["r"]), f(&c4["g"]), f(&c4["b"]), f(&c4["a"])],
                                 ));
                             }
+                            // `ParentRectFitter.OnEnable → FitParent`: anchors 0–1 and zero
+                            // offsets, i.e. the parent's rect
+                            "ParentRectFitter" if ct["m_Enabled"].as_i64().unwrap_or(1) != 0 => {
+                                if let Xf::Rect {
+                                    anchor_min,
+                                    anchor_max,
+                                    anchored,
+                                    size_delta,
+                                    ..
+                                } = &mut node.xf
+                                {
+                                    *anchor_min = [0.0, 0.0];
+                                    *anchor_max = [1.0, 1.0];
+                                    *anchored = [0.0, 0.0];
+                                    *size_delta = [0.0, 0.0];
+                                }
+                            }
+                            // `Awake` runs whether or not the component is enabled
+                            "ParticleShaderSettings" => {
+                                shader_settings = Some(ct["mode"].as_i64().unwrap_or(0));
+                            }
                             "ScenarioEffector" => {
                                 stop_destroys = ct["stopBehaviour"].as_i64().unwrap_or(1) == 1;
                                 play_on_enable = ct["playOnEnable"].as_i64().unwrap_or(1) != 0;
@@ -362,10 +458,44 @@ impl Prefab {
             {
                 let seed = crc32fast::hash(node.name.as_bytes())
                     ^ (systems.len() as u32).wrapping_mul(0x9E37_79B9);
-                let def = SystemDef::parse(ps, r, seed);
+                let mut def = SystemDef::parse(ps, r, seed);
+                // Sprite / SpriteRenderer emission shapes: the sprite's size in units
+                if matches!(def.shape_kind(), 19 | 20) {
+                    let sh = &ps["ShapeModule"];
+                    let sp = if def.shape_kind() == 19 {
+                        pid(&sh["m_Sprite"])
+                    } else {
+                        tree(pid(&sh["m_SpriteRenderer"])).map_or(0, |r| pid(&r["m_Sprite"]))
+                    };
+                    def.shape.sprite_size =
+                        sprite(sp).map(|s| [s.size[0] / s.ppu, s.size[1] / s.ppu]);
+                }
+                // Mesh render mode: the renderer's mesh (built-in Quad 10210 / Cube 10202, or
+                // one serialized in this bundle); others fall back to the quad
+                if def.render_mode == crate::particle::RenderMode::Mesh {
+                    let m = &r["m_Mesh"];
+                    let id = pid(m);
+                    def.mesh = match id {
+                        10202 => Some(crate::particle::Mesh::cube()),
+                        10210 | 0 => None,
+                        _ if m["m_FileID"].as_i64() == Some(0) => {
+                            tree(id).and_then(crate::particle::Mesh::from_unity)
+                        }
+                        _ => None,
+                    }
+                    .map(std::sync::Arc::new);
+                }
+                // `ParticleShaderSettings.mode`: 0 Additive → 1, 1 AlphaBlend → 0
+                if let Some(mode) = shader_settings {
+                    def.set_custom1x(if mode == 0 { 1.0 } else { 0.0 });
+                }
                 let mat = r["m_Materials"]
                     .as_array()
                     .and_then(|m| m.first())
+                    .and_then(|m| material(pid(m)));
+                node.trail_material = r["m_Materials"]
+                    .as_array()
+                    .and_then(|m| m.get(1))
                     .and_then(|m| material(pid(m)));
                 node.system = Some((systems.len(), mat));
                 systems.push(def);
@@ -392,12 +522,22 @@ impl Prefab {
             Some(ctrl) => Some(load_animator(&dir, &by, ctrl, &nodes)?),
             None => None,
         };
+        let subs = systems
+            .iter()
+            .map(|d: &SystemDef| {
+                d.sub_birth
+                    .iter()
+                    .filter_map(|id| system_of.get(id).copied())
+                    .collect()
+            })
+            .collect();
         Ok(Prefab {
             nodes,
             systems,
             animator,
             stop_destroys,
             play_on_enable,
+            subs,
         })
     }
 }
@@ -489,6 +629,53 @@ fn load_animator(
             114 if attr == h("m_Color.a") => Some(Prop::Color(3)),
             224 if attr == h("m_AnchoredPosition.x") => Some(Prop::AnchoredX),
             224 if attr == h("m_AnchoredPosition.y") => Some(Prop::AnchoredY),
+            224 if attr == h("m_LocalPosition.z") => Some(Prop::Position(2)),
+            4 | 224
+                if let Some(k) = [
+                    "localEulerAnglesRaw.x",
+                    "localEulerAnglesRaw.y",
+                    "localEulerAnglesRaw.z",
+                ]
+                .iter()
+                .position(|n| attr == h(n)) =>
+            {
+                Some(Prop::Euler(k))
+            }
+            212 => ["m_Color.r", "m_Color.g", "m_Color.b", "m_Color.a"]
+                .iter()
+                .position(|n| attr == h(n))
+                .map(Prop::SpriteColor)
+                .or_else(|| {
+                    // material property bindings: CRC32(name) & 0x0FFFFFFF, component in bits
+                    // 28–29, bit 30 set for colours
+                    (0..4)
+                        .find(|&k| {
+                            attr == (h("_Color") & 0x0FFF_FFFF) | ((k as u32) << 28) | 1 << 30
+                        })
+                        .map(Prop::SpriteMatColor)
+                }),
+            198 if attr == h("looping") => Some(Prop::Looping),
+            198 => (0..8)
+                .find(|i| {
+                    attr == h(&format!(
+                        "EmissionModule.m_Bursts.Array.data[{i}].countCurve.scalar"
+                    ))
+                })
+                .map(Prop::BurstCount)
+                .or_else(|| {
+                    [("minColor", true), ("maxColor", false)]
+                        .iter()
+                        .find_map(|&(m, min)| {
+                            (0..4)
+                                .find(|&c| {
+                                    attr == h(&format!(
+                                        "InitialModule.startColor.{m}.{}",
+                                        ["r", "g", "b", "a"][c]
+                                    ))
+                                })
+                                .map(|c| Prop::StartColor(min, c))
+                        })
+                }),
             4 => ["m_LocalScale.x", "m_LocalScale.y", "m_LocalScale.z"]
                 .iter()
                 .position(|n| attr == h(n))
@@ -528,12 +715,26 @@ fn load_animator(
                         Some((node, prop, cv.data.clone()))
                     })
                     .collect(),
+                events: m
+                    .events
+                    .iter()
+                    .filter_map(|e| {
+                        let node = paths.iter().position(|p| *p == e.data)?;
+                        let ev = match e.function.as_str() {
+                            "OnPlayParticle" => ClipEvent::PlayParticle(node),
+                            "OnStopParticle" => ClipEvent::StopParticle(node),
+                            _ => return None,
+                        };
+                        Some((e.time, ev))
+                    })
+                    .collect(),
             },
             None => Clip {
                 length: 0.0,
                 looping: false,
                 start: 0.0,
                 curves: Vec::new(),
+                events: Vec::new(),
             },
         })
         .collect();
@@ -593,11 +794,30 @@ fn load_animator(
 pub struct EffectQuad {
     pub order: i32,
     pub corners: [[f32; 2]; 4],
-    /// u0, v0, u1, v1 with v down (image rows)
-    pub uv: [f32; 4],
+    /// Per-corner UVs in image space (v down, image rows).
+    pub uvs: [[f32; 2]; 4],
     pub color: [f32; 4],
     pub tex: Option<String>,
     pub blend: Blend,
+    pub mask: Option<QuadMask>,
+}
+
+/// The `SpriteMask` a quad interacts with, in the quad's corner space.
+#[derive(Debug, Clone)]
+pub struct QuadMask {
+    /// Corners (−,−) (+,−) (+,+) (−,+) of the mask sprite.
+    pub corners: [[f32; 2]; 4],
+    /// Texture rect u0, v0, u1, v1 (v down).
+    pub uv: [f32; 4],
+    pub tex: String,
+    pub cutoff: f32,
+    pub outside: bool,
+}
+
+/// Corner UVs of an image rect (u0, v0, u1, v1, v down) for corners (−,−) (+,−) (+,+) (−,+)
+/// with y up.
+fn rect_uvs(r: [f32; 4]) -> [[f32; 2]; 4] {
+    [[r[0], r[3]], [r[2], r[3]], [r[2], r[1]], [r[0], r[1]]]
 }
 
 /// The Animator's playing state: current state, time in it, and an optional crossfade.
@@ -618,10 +838,19 @@ pub struct EffectInstance {
     anchored: Vec<[f32; 2]>,
     scale: Vec<[f32; 3]>,
     pos: Vec<[f32; 3]>,
+    /// Animated `localEulerAnglesRaw` components (degrees) replacing the node's own.
+    euler: Vec<[Option<f32>; 3]>,
+    sprite_color: Vec<[f32; 4]>,
+    /// `material._Color` of the node's `SpriteRenderer` (Sprites/Default multiplies it in).
+    sprite_mat_color: Vec<[f32; 4]>,
+    /// Systems whose properties the Animator changed: their own copy of the definition.
+    defs: Vec<Option<SystemDef>>,
     anim: Option<AnimPlay>,
     time: f32,
     stopped_at: Option<f32>,
     stop_wait: f32,
+    /// Canvas size of the last draw (world-space emitters need the layout while stepping).
+    canvas: std::cell::Cell<[f32; 2]>,
     pub finished: bool,
     dt: f32,
 }
@@ -651,6 +880,14 @@ impl EffectInstance {
                 .collect(),
             scale: prefab.nodes.iter().map(|n| n.scale).collect(),
             pos: prefab.nodes.iter().map(|n| n.pos).collect(),
+            euler: vec![[None; 3]; prefab.nodes.len()],
+            sprite_mat_color: vec![[1.0; 4]; prefab.nodes.len()],
+            defs: vec![None; prefab.systems.len()],
+            sprite_color: prefab
+                .nodes
+                .iter()
+                .map(|n| n.sprite_renderer.as_ref().map_or([1.0; 4], |s| s.1))
+                .collect(),
             anim: prefab
                 .play_on_enable
                 .then_some(())
@@ -664,10 +901,16 @@ impl EffectInstance {
             time: 0.0,
             stopped_at: None,
             stop_wait: 0.0,
+            canvas: std::cell::Cell::new([1920.0, 1080.0]),
             finished: false,
             dt,
         };
         let _ = n;
+        for subs in &inst.prefab.subs {
+            for &j in subs {
+                inst.systems[j].sub_only = true;
+            }
+        }
         inst.apply_animator();
         // `playOnAwake` systems in the active hierarchy start on instantiation
         for i in 0..inst.prefab.nodes.len() {
@@ -675,11 +918,24 @@ impl EffectInstance {
                 && inst.effective_active(i)
                 && inst.prefab.systems[s].play_on_awake
             {
-                let def = inst.prefab.systems[s].clone();
+                let def = inst.defs[s]
+                    .clone()
+                    .unwrap_or_else(|| inst.prefab.systems[s].clone());
                 inst.systems[s].play(&def, dt);
             }
         }
         inst
+    }
+
+    /// `i` and its descendants.
+    fn subtree(&self, i: usize) -> Vec<usize> {
+        let mut out = vec![i];
+        let mut k = 0;
+        while k < out.len() {
+            out.extend(self.prefab.nodes[out[k]].children.iter().copied());
+            k += 1;
+        }
+        out
     }
 
     fn effective_active(&self, mut i: usize) -> bool {
@@ -735,16 +991,56 @@ impl EffectInstance {
         let before: Vec<bool> = (0..self.prefab.nodes.len())
             .map(|i| self.effective_active(i))
             .collect();
+        // world simulation space: tell those systems where their emitter is now
+        if self.prefab.systems.iter().any(|d| d.world_space) {
+            let canvas = self.canvas.get();
+            let (world, _) = self.layout(&Parent {
+                matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                rect: [-canvas[0] * 0.5, -canvas[1] * 0.5, canvas[0], canvas[1]],
+            });
+            let wu = canvas[1] * 0.5;
+            for (i, node) in self.prefab.nodes.iter().enumerate() {
+                if let Some((s, _)) = node.system
+                    && self.prefab.systems[s].world_space
+                {
+                    self.systems[s].emitter = [world[i][2] / wu, world[i][5] / wu, 0.0];
+                }
+            }
+        }
+        let mut fired = Vec::new();
         if let (Some(play), Some(a)) = (self.anim.as_mut(), self.prefab.animator.as_ref()) {
-            advance(play, a, dt);
+            for (state, t0, t1) in advance(play, a, dt) {
+                fired.extend(clip_events(a, state, t0, t1));
+            }
         }
         self.apply_animator();
+        for ev in fired {
+            let (node, play) = match ev {
+                ClipEvent::PlayParticle(n) => (n, true),
+                ClipEvent::StopParticle(n) => (n, false),
+            };
+            for i in self.subtree(node) {
+                let Some((s, _)) = self.prefab.nodes[i].system else {
+                    continue;
+                };
+                if play {
+                    if self.effective_active(i) {
+                        let def = self.defs[s]
+                            .clone()
+                            .unwrap_or_else(|| self.prefab.systems[s].clone());
+                        self.systems[s].play(&def, dt);
+                    }
+                } else {
+                    self.systems[s].stop_emitting();
+                }
+            }
+        }
         for i in 0..self.prefab.nodes.len() {
             let Some((s, _)) = self.prefab.nodes[i].system else {
                 continue;
             };
             let now = self.effective_active(i);
-            let def = &self.prefab.systems[s];
+            let def = self.defs[s].as_ref().unwrap_or(&self.prefab.systems[s]);
             if now && !before[i] {
                 if def.play_on_awake {
                     self.systems[s].play(def, dt);
@@ -759,12 +1055,23 @@ impl EffectInstance {
                 self.systems[s].step(def, dt);
             }
         }
+        // Birth sub-emitters follow their parents' live particles
+        for p in 0..self.prefab.subs.len() {
+            if self.prefab.subs[p].is_empty() {
+                continue;
+            }
+            let origins = self.systems[p].particle_origins();
+            for &j in &self.prefab.subs[p] {
+                let def = self.defs[j].as_ref().unwrap_or(&self.prefab.systems[j]);
+                self.systems[j].sync_subs(def, &origins);
+            }
+        }
         if let Some(at) = self.stopped_at {
             let alive = self
                 .systems
                 .iter()
-                .zip(&self.prefab.systems)
-                .any(|(s, d)| s.is_alive(d));
+                .zip(self.defs.iter().zip(&self.prefab.systems))
+                .any(|(s, (o, d))| s.is_alive(o.as_ref().unwrap_or(d)));
             if !alive && self.time - at >= self.stop_wait && self.prefab.stop_destroys {
                 self.finished = true;
             }
@@ -812,6 +1119,21 @@ impl EffectInstance {
                 Prop::AnchoredY => self.anchored[node][1] = v,
                 Prop::Scale(k) => self.scale[node][k] = v,
                 Prop::Position(k) => self.pos[node][k] = v,
+                Prop::Euler(k) => self.euler[node][k] = Some(v),
+                Prop::SpriteColor(c) => self.sprite_color[node][c] = v,
+                Prop::SpriteMatColor(c) => self.sprite_mat_color[node][c] = v,
+                Prop::Looping | Prop::BurstCount(_) | Prop::StartColor(..) => {
+                    let Some((s, _)) = self.prefab.nodes[node].system else {
+                        continue;
+                    };
+                    let def = self.defs[s].get_or_insert_with(|| self.prefab.systems[s].clone());
+                    match prop {
+                        Prop::Looping => def.set_looping(v > 0.5),
+                        Prop::BurstCount(b) => def.set_burst_count(b, v),
+                        Prop::StartColor(min, c) => def.set_start_color(min, c, v),
+                        _ => {}
+                    }
+                }
             }
         }
     }
@@ -857,12 +1179,24 @@ impl EffectInstance {
                 }
                 Xf::Plain => ([self.pos[i][0], self.pos[i][1]], [0.0; 4]),
             };
-            // z rotation of the quaternion (the prefabs only turn about z)
-            let q = node.rot;
-            let ang = 2.0 * q[2].atan2(q[3]);
-            let (s, c) = (sinf(ang), cosf(ang));
+            // the rotation seen by the orthographic scenario camera: the x/y rows and columns
+            // of the 3D rotation
+            let r = match self.euler[i] {
+                [None, None, None] => quat_matrix(node.rot),
+                e => {
+                    let own = quat_euler(node.rot);
+                    euler_matrix([0, 1, 2].map(|k| e[k].unwrap_or(own[k])))
+                }
+            };
             let (sx, sy) = (self.scale[i][0], self.scale[i][1]);
-            let l = [c * sx, -s * sy, local_pos[0], s * sx, c * sy, local_pos[1]];
+            let l = [
+                r[0][0] * sx,
+                r[0][1] * sy,
+                local_pos[0],
+                r[1][0] * sx,
+                r[1][1] * sy,
+                local_pos[1],
+            ];
             world[i] = mul(pw, l);
             rects[i] = rect;
         }
@@ -884,10 +1218,60 @@ impl EffectInstance {
         if self.finished {
             return Vec::new();
         }
+        self.canvas.set(canvas);
         let (world, rects) = self.layout(parent);
         let wu = canvas[1] * 0.5; // canvas pixels per scenario-camera world unit
         let mut out: Vec<(i32, f32, usize, EffectQuad)> = Vec::new();
         let mut seq = 0usize;
+        // active sprite masks, placed like a `SpriteRenderer`'s sprite
+        let masks: Vec<(QuadMask, Option<(i32, i32)>)> = (0..self.prefab.nodes.len())
+            .filter(|&i| self.effective_active(i))
+            .filter_map(|i| {
+                let m = self.prefab.nodes[i].sprite_mask.as_ref()?;
+                let w = world[i];
+                let s = &m.sprite;
+                let (sw, sh) = (s.size[0] / s.ppu, s.size[1] / s.ppu);
+                let (x0, y0) = (-s.pivot[0] * sw, -s.pivot[1] * sh);
+                let tf = |p: [f32; 2]| {
+                    [
+                        w[0] * p[0] + w[1] * p[1] + w[2],
+                        w[3] * p[0] + w[4] * p[1] + w[5],
+                    ]
+                };
+                Some((
+                    QuadMask {
+                        corners: [
+                            tf([x0, y0]),
+                            tf([x0 + sw, y0]),
+                            tf([x0 + sw, y0 + sh]),
+                            tf([x0, y0 + sh]),
+                        ],
+                        uv: s.tex.uv,
+                        tex: s.tex.png.clone(),
+                        cutoff: m.cutoff,
+                        outside: false,
+                    },
+                    m.range,
+                ))
+            })
+            .collect();
+        // Some(mask) to draw with; None: not drawn (inside a mask that does not exist)
+        let mask_for = |interaction: u8, order: i32| -> Option<Option<QuadMask>> {
+            if interaction == 0 {
+                return Some(None);
+            }
+            let hit = masks
+                .iter()
+                .find(|(_, r)| r.is_none_or(|(back, front)| back < order && order <= front));
+            match (hit, interaction) {
+                (Some((m, _)), _) => Some(Some(QuadMask {
+                    outside: interaction == 2,
+                    ..m.clone()
+                })),
+                (None, 2) => Some(None),
+                (None, _) => None,
+            }
+        };
         for i in 0..self.prefab.nodes.len() {
             if !self.effective_active(i) {
                 continue;
@@ -920,15 +1304,18 @@ impl EffectInstance {
                     EffectQuad {
                         order: canvas_order,
                         corners,
-                        uv,
+                        uvs: rect_uvs(uv),
                         color: self.color[i],
                         tex,
                         blend: Blend::Alpha,
+                        mask: None,
                     },
                 ));
                 seq += 1;
             }
-            if let Some((s, col, order)) = &node.sprite_renderer {
+            if let Some((s, _, order)) = &node.sprite_renderer
+                && let Some(mask) = mask_for(node.mask_interaction, *order)
+            {
                 let (sw, sh) = (s.size[0] / s.ppu, s.size[1] / s.ppu);
                 let (x0, y0) = (-s.pivot[0] * sw, -s.pivot[1] * sh);
                 let corners = [
@@ -939,45 +1326,118 @@ impl EffectInstance {
                 ];
                 out.push((
                     *order,
-                    -node.pos[2],
+                    -self.pos[i][2],
                     seq,
                     EffectQuad {
                         order: *order,
                         corners,
-                        uv: s.tex.uv,
-                        color: *col,
+                        uvs: rect_uvs(s.tex.uv),
+                        color: [0, 1, 2, 3]
+                            .map(|k| self.sprite_color[i][k] * self.sprite_mat_color[i][k]),
                         tex: Some(s.tex.png.clone()),
                         blend: Blend::Alpha,
+                        mask,
                     },
                 ));
                 seq += 1;
             }
-            if let Some((si, mat)) = &node.system {
-                let def = &self.prefab.systems[*si];
-                // `ScalingMode.Local`: position from the hierarchy, the system's own scale only
-                let origin = [w[2], w[5]];
+            if let Some((si, mat)) = &node.system
+                && let Some(mask) = mask_for(
+                    node.mask_interaction,
+                    self.prefab.systems[*si].sorting_order,
+                )
+            {
+                let def = self.defs[*si].as_ref().unwrap_or(&self.prefab.systems[*si]);
+                // `ScalingMode.Local`: position from the hierarchy, the system's own scale only;
+                // world-space particles carry their emission point, relative to the parent
+                let origin = if def.world_space {
+                    [parent.matrix[2], parent.matrix[5]]
+                } else {
+                    [w[2], w[5]]
+                };
                 let (sx, sy) = (self.scale[i][0], self.scale[i][1]);
                 let tex = mat.as_ref().and_then(|m| m.tex.clone());
                 let blend = mat.as_ref().map_or(Blend::Alpha, |m| m.blend);
-                for (corners, uv, color) in self.systems[*si].quads(def) {
+                // the emitter's rotation: its own (3D) under its parent's (z)
+                let q = node.rot;
+                let parent_angle = node
+                    .parent
+                    .map_or(0.0, |pi| world[pi][3].atan2(world[pi][0]));
+                let turned = q[0].abs() > 1e-4
+                    || q[1].abs() > 1e-4
+                    || q[2].abs() > 1e-4
+                    || parent_angle.abs() > 1e-6;
+                let rot = (turned && !def.world_space).then(|| {
+                    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+                    let m = [
+                        [
+                            1.0 - 2.0 * (y * y + z * z),
+                            2.0 * (x * y - z * w),
+                            2.0 * (x * z + y * w),
+                        ],
+                        [
+                            2.0 * (x * y + z * w),
+                            1.0 - 2.0 * (x * x + z * z),
+                            2.0 * (y * z - x * w),
+                        ],
+                        [
+                            2.0 * (x * z - y * w),
+                            2.0 * (y * z + x * w),
+                            1.0 - 2.0 * (x * x + y * y),
+                        ],
+                    ];
+                    let (s, c) = (sinf(parent_angle), cosf(parent_angle));
+                    let rz = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+                    let mut out = [[0.0f32; 3]; 3];
+                    for (r, row) in out.iter_mut().enumerate() {
+                        for (k, cell) in row.iter_mut().enumerate() {
+                            *cell = (0..3).map(|j| rz[r][j] * m[j][k]).sum();
+                        }
+                    }
+                    out
+                });
+                // trails (with their own material) under the particles
+                let trail_tex = node.trail_material.as_ref().and_then(|m| m.tex.clone());
+                let trail_blend = node
+                    .trail_material
+                    .as_ref()
+                    .map_or(Blend::Alpha, |m| m.blend);
+                let trails = self.systems[*si]
+                    .trail_quads(def, rot)
+                    .into_iter()
+                    .map(|q| (q, trail_tex.clone(), trail_blend));
+                let particles = self.systems[*si]
+                    .quads_rotated(def, rot)
+                    .into_iter()
+                    .map(|q| (q, tex.clone(), blend));
+                for ((corners, uvs, color, custom1), tex, blend) in trails.chain(particles) {
+                    let blend = match blend {
+                        Blend::ByCustom1 if custom1 > 0.5 => Blend::Additive,
+                        Blend::ByCustom1 => Blend::Alpha,
+                        b => b,
+                    };
                     let px =
                         corners.map(|c| [origin[0] + c[0] * sx * wu, origin[1] + c[1] * sy * wu]);
                     let base = tex.as_ref().map_or([0.0, 0.0, 1.0, 1.0], |t| t.uv);
                     // particle UVs have v up; convert into the texture's (v down) sub-rect
-                    let bu = |u: f32| base[0] + (base[2] - base[0]) * u;
-                    let bv = |v: f32| base[1] + (base[3] - base[1]) * (1.0 - v);
-                    let quad_uv = [bu(uv[0]), bv(uv[3]), bu(uv[2]), bv(uv[1])];
+                    let quad_uv = uvs.map(|[u, v]| {
+                        [
+                            base[0] + (base[2] - base[0]) * u,
+                            base[1] + (base[3] - base[1]) * (1.0 - v),
+                        ]
+                    });
                     out.push((
                         def.sorting_order,
-                        -node.pos[2],
+                        -self.pos[i][2],
                         seq,
                         EffectQuad {
                             order: def.sorting_order,
                             corners: px,
-                            uv: quad_uv,
+                            uvs: quad_uv,
                             color,
                             tex: tex.as_ref().map(|t| t.png.clone()),
                             blend,
+                            mask: mask.clone(),
                         },
                     ));
                 }
@@ -1002,6 +1462,52 @@ impl EffectInstance {
     }
 }
 
+/// Rotation matrix of a unit quaternion (x, y, z, w).
+fn quat_matrix(q: [f32; 4]) -> [[f32; 3]; 3] {
+    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+        ],
+        [
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+        ],
+        [
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
+/// Unity's Euler angles (degrees): z, then x, then y, i.e. R = Ry · Rx · Rz.
+fn euler_matrix(e: [f32; 3]) -> [[f32; 3]; 3] {
+    let [x, y, z] = e.map(f32::to_radians);
+    let (sx, cx, sy, cy, sz, cz) = (sinf(x), cosf(x), sinf(y), cosf(y), sinf(z), cosf(z));
+    [
+        [cy * cz + sy * sx * sz, -cy * sz + sy * sx * cz, sy * cx],
+        [cx * sz, cx * cz, -sx],
+        [-sy * cz + cy * sx * sz, sy * sz + cy * sx * cz, cy * cx],
+    ]
+}
+
+/// The Euler angles (degrees) of a quaternion, as [`euler_matrix`] takes them.
+fn quat_euler(q: [f32; 4]) -> [f32; 3] {
+    let m = quat_matrix(q);
+    let sx = (-m[1][2]).clamp(-1.0, 1.0);
+    let x = atan2f(sx, sqrtf(1.0 - sx * sx));
+    let (y, z) = if sx.abs() < 0.999_999 {
+        (atan2f(m[0][2], m[2][2]), atan2f(m[1][0], m[1][1]))
+    } else {
+        (atan2f(-m[2][0], m[0][0]), 0.0)
+    };
+    [x, y, z].map(f32::to_degrees)
+}
+
 /// The transform an instance hangs off, in canvas pixels (origin at the canvas centre, y up).
 #[derive(Debug, Clone, Copy)]
 pub struct Parent {
@@ -1022,17 +1528,23 @@ fn mul(a: [f32; 6], b: [f32; 6]) -> [f32; 6] {
     ]
 }
 
-/// One Animator frame: state time, exit-time transitions with their crossfade.
-fn advance(play: &mut AnimPlay, a: &Animator, dt: f32) {
+/// One Animator frame: state time, exit-time transitions with their crossfade. Returns the
+/// (state, time before, time after) windows played, for animation events.
+fn advance(play: &mut AnimPlay, a: &Animator, dt: f32) -> Vec<(usize, f32, f32)> {
     let len = |s: usize| {
         a.states[s]
             .clip
             .map_or(0.0, |c| a.clips[c].length)
             .max(1e-4)
     };
+    let mut windows = Vec::with_capacity(2);
+    let t0 = play.time;
     play.time += dt * a.states[play.state].speed;
+    windows.push((play.state, t0, play.time));
     if let Some((next, nt, el, fl)) = play.fade.as_mut() {
+        let n0 = *nt;
         *nt += dt * a.states[*next].speed;
+        windows.push((*next, n0, *nt));
         *el += dt;
         if *el >= *fl {
             let (n, t) = (*next, *nt);
@@ -1040,7 +1552,7 @@ fn advance(play: &mut AnimPlay, a: &Animator, dt: f32) {
             play.time = t;
             play.fade = None;
         }
-        return;
+        return windows;
     }
     if let Some((dest, exit, dur, fixed)) = a.states[play.state].exit
         && play.time / len(play.state) >= exit
@@ -1048,6 +1560,40 @@ fn advance(play: &mut AnimPlay, a: &Animator, dt: f32) {
         let fl = if fixed { dur } else { dur * len(play.state) };
         play.fade = Some((dest, 0.0, 0.0, fl));
     }
+    windows
+}
+
+/// Events of `state`'s clip whose time falls in [t0, t1) of the state's play time (looping
+/// clips wrap).
+fn clip_events(a: &Animator, state: usize, t0: f32, t1: f32) -> Vec<ClipEvent> {
+    let Some(c) = a.states[state].clip.map(|c| &a.clips[c]) else {
+        return Vec::new();
+    };
+    if c.events.is_empty() || t1 <= t0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if c.looping && c.length > 0.0 {
+        let first = (t0 / c.length).floor() as i64;
+        let last = (t1 / c.length).floor() as i64;
+        for k in first..=last {
+            let base = k as f32 * c.length;
+            for &(t, ev) in &c.events {
+                let at = base + (t - c.start);
+                if at >= t0 && at < t1 {
+                    out.push(ev);
+                }
+            }
+        }
+    } else {
+        for &(t, ev) in &c.events {
+            let at = t - c.start;
+            if at >= t0 && at < t1 {
+                out.push(ev);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1060,5 +1606,21 @@ mod tests {
         let child = [1.0, 0.0, 1.0, 0.0, 1.0, 1.0];
         let m = mul(parent, child);
         assert_eq!([m[2], m[5]], [12.0, 22.0]);
+    }
+
+    #[test]
+    fn euler_angles_round_trip_through_the_quaternion_matrix() {
+        // Quaternion.Euler(30, 20, 10) = AngleAxis(20, up) · AngleAxis(30, right) · AngleAxis(10, fwd)
+        let q = [0.268_536, 0.144_878, 0.038_135, 0.951_549];
+        let e = quat_euler(q);
+        for (a, b) in e.iter().zip([30.0, 20.0, 10.0]) {
+            assert!((a - b).abs() < 0.1, "{e:?}");
+        }
+        let (m, n) = (euler_matrix(e), quat_matrix(q));
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!((m[r][c] - n[r][c]).abs() < 1e-3);
+            }
+        }
     }
 }

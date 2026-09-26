@@ -99,6 +99,16 @@ pub enum Curve {
 }
 
 impl Curve {
+    /// Animating `….scalar`: the constant (or the upper constant) becomes `v`.
+    fn set_scalar(&mut self, v: f32) {
+        match self {
+            Curve::Const(c) => *c = v,
+            Curve::TwoConsts(_, hi) => *hi = v,
+            // curve modes keep their shape (their multiplier is folded in at parse time)
+            Curve::Keys(_) | Curve::TwoCurves(..) => {}
+        }
+    }
+
     pub fn parse(v: &Value) -> Self {
         let scalar = fv(v, "scalar");
         match v["minMaxState"].as_i64().unwrap_or(0) {
@@ -193,6 +203,8 @@ pub enum ColorSpec {
     Gradient(Gradient),
     TwoColors([f32; 4], [f32; 4]),
     TwoGradients(Gradient, Gradient),
+    /// `ParticleSystemGradientMode.RandomColor`: the gradient at a random point.
+    RandomColor(Gradient),
 }
 
 fn rgba(v: &Value) -> [f32; 4] {
@@ -202,7 +214,8 @@ fn rgba(v: &Value) -> [f32; 4] {
 impl ColorSpec {
     fn parse(v: &Value) -> Self {
         match v["minMaxState"].as_i64().unwrap_or(0) {
-            1 | 4 => ColorSpec::Gradient(Gradient::parse(&v["maxGradient"])),
+            1 => ColorSpec::Gradient(Gradient::parse(&v["maxGradient"])),
+            4 => ColorSpec::RandomColor(Gradient::parse(&v["maxGradient"])),
             2 => ColorSpec::TwoColors(rgba(&v["minColor"]), rgba(&v["maxColor"])),
             3 => ColorSpec::TwoGradients(
                 Gradient::parse(&v["minGradient"]),
@@ -225,6 +238,7 @@ impl ColorSpec {
             ColorSpec::Gradient(g) => g.at(t),
             ColorSpec::TwoColors(a, b) => mix(*a, *b),
             ColorSpec::TwoGradients(a, b) => mix(a.at(t), b.at(t)),
+            ColorSpec::RandomColor(g) => g.at(rnd),
         }
     }
 }
@@ -248,7 +262,7 @@ struct Burst {
 }
 
 #[derive(Debug, Clone)]
-struct Shape {
+pub struct Shape {
     enabled: bool,
     kind: i64,
     radius: f32,
@@ -261,6 +275,24 @@ struct Shape {
     scale: [f32; 3],
     random_direction: f32,
     spherical_direction: f32,
+    /// Donut (17): the tube radius.
+    donut_radius: f32,
+    /// Sprite / SpriteRenderer (19 / 20): the sprite's size in units (set by the prefab loader;
+    /// emission is uniform over its rect, approximation of its mesh).
+    pub sprite_size: Option<[f32; 2]>,
+}
+
+/// `TrailModule` in Particles mode: a ribbon through each particle's recent positions.
+#[derive(Debug, Clone)]
+struct TrailDef {
+    /// Fraction of the particle's lifetime a trail point lives.
+    lifetime: Curve,
+    min_distance: f32,
+    width: Curve,
+    size_affects_width: bool,
+    inherit_color: bool,
+    color_over_trail: Option<ColorSpec>,
+    color_over_lifetime: Option<ColorSpec>,
 }
 
 #[derive(Debug, Clone)]
@@ -276,17 +308,33 @@ pub struct SystemDef {
     size: Curve,
     size3d: Option<(Curve, Curve)>,
     rotation: Curve,
+    /// `rotation3D`: start rotation about x and y (radians).
+    rotation_xy: Option<[Curve; 2]>,
     color: ColorSpec,
     gravity: Curve,
     max_particles: usize,
     rate: Curve,
     bursts: Vec<Burst>,
-    shape: Shape,
+    pub shape: Shape,
     velocity: Option<[Curve; 4]>,
     clamp: Option<(Curve, f32)>,
     size_ol: Option<(Curve, Option<Curve>)>,
     color_ol: Option<ColorSpec>,
     rotation_ol: Option<Curve>,
+    /// `RotationModule.separateAxes`: angular velocity about x and y.
+    rotation_ol_xy: Option<[Curve; 2]>,
+    /// Mesh render mode geometry (the built-in quad unless the prefab loader sets one).
+    pub mesh: Option<std::sync::Arc<Mesh>>,
+    /// `SubModule` Birth sub-emitters: their `ParticleSystem` path ids.
+    pub sub_birth: Vec<i64>,
+    /// `simulationSpace` World: particles stay where they were emitted.
+    pub world_space: bool,
+    /// `SizeBySpeedModule`: (x curve, y curve when separate, speed range).
+    size_by_speed: Option<(Curve, Option<Curve>, [f32; 2])>,
+    /// `RotationBySpeedModule`: (z curve, speed range) — angular velocity by speed.
+    rotation_by_speed: Option<(Curve, [f32; 2])>,
+    /// `TrailModule` (Particles mode).
+    trail: Option<TrailDef>,
     noise: Option<(Curve, f32, bool)>,
     /// tiles x, tiles y, frame over time, start frame, cycles, single row
     sheet: Option<(u32, u32, Curve, Curve, f32, Option<u32>)>,
@@ -295,10 +343,52 @@ pub struct SystemDef {
     velocity_scale: f32,
     max_particle_size: f32,
     pub sorting_order: i32,
+    /// `Custom1.x` as the renderer streams it (`CustomDataModule` vector 0, x), when the
+    /// renderer's vertex streams include `Custom1X`; see [`SystemDef::set_custom1x`].
+    custom1x: Option<Curve>,
     seed: u32,
 }
 
+/// `ParticleSystemVertexStream.Custom1X`.
+const CUSTOM1X_STREAM: i64 = 31;
+
 impl SystemDef {
+    /// Animated `looping`.
+    pub fn set_looping(&mut self, on: bool) {
+        self.looping = on;
+    }
+
+    /// Animated `EmissionModule.m_Bursts.Array.data[i].countCurve.scalar`.
+    pub fn set_burst_count(&mut self, i: usize, v: f32) {
+        if let Some(b) = self.bursts.get_mut(i) {
+            b.count.set_scalar(v);
+        }
+    }
+
+    /// Animated `InitialModule.startColor.{minColor,maxColor}` component `c`: the constant
+    /// colour is `maxColor`; `minColor` counts only in the two-colour mode.
+    pub fn set_start_color(&mut self, min: bool, c: usize, v: f32) {
+        match (&mut self.color, min) {
+            (ColorSpec::Color(k), false) | (ColorSpec::TwoColors(_, k), false) => k[c] = v,
+            (ColorSpec::TwoColors(k, _), true) => k[c] = v,
+            _ => {}
+        }
+    }
+
+    pub fn shape_kind(&self) -> i64 {
+        if self.shape.enabled {
+            self.shape.kind
+        } else {
+            -1
+        }
+    }
+
+    /// `ParticleShaderSettings.UpdateMode` (on `Awake`): adds the `Custom1X` stream and sets
+    /// custom data vector 0 to the constant 1 (`Mode.Additive`) or 0 (`Mode.AlphaBlend`).
+    pub fn set_custom1x(&mut self, value: f32) {
+        self.custom1x = Some(Curve::Const(value));
+    }
+
     /// `ps` = the ParticleSystem typetree, `r` = its ParticleSystemRenderer's.
     pub fn parse(ps: &Value, r: &Value, seed: u32) -> Self {
         let i = &ps["InitialModule"];
@@ -345,6 +435,12 @@ impl SystemDef {
                 )
             }),
             rotation: Curve::parse(&i["startRotation"]),
+            rotation_xy: bv(i, "rotation3D").then(|| {
+                [
+                    Curve::parse(&i["startRotationX"]),
+                    Curve::parse(&i["startRotationY"]),
+                ]
+            }),
             color: ColorSpec::parse(&i["startColor"]),
             gravity: Curve::parse(&i["gravityModifier"]),
             max_particles: i["maxNumParticles"].as_u64().unwrap_or(1000) as usize,
@@ -367,6 +463,8 @@ impl SystemDef {
                 scale: v3(&sh["m_Scale"]),
                 random_direction: fv(sh, "randomDirectionAmount"),
                 spherical_direction: fv(sh, "sphericalDirectionAmount"),
+                donut_radius: sh.get("donutRadius").map_or(0.2, f),
+                sprite_size: None,
             },
             velocity: on("VelocityModule").then(|| {
                 let v = &ps["VelocityModule"];
@@ -388,6 +486,60 @@ impl SystemDef {
             }),
             color_ol: on("ColorModule").then(|| ColorSpec::parse(&ps["ColorModule"]["gradient"])),
             rotation_ol: on("RotationModule").then(|| Curve::parse(&ps["RotationModule"]["curve"])),
+            rotation_ol_xy: (on("RotationModule") && bv(&ps["RotationModule"], "separateAxes"))
+                .then(|| {
+                    [
+                        Curve::parse(&ps["RotationModule"]["x"]),
+                        Curve::parse(&ps["RotationModule"]["y"]),
+                    ]
+                }),
+            mesh: None,
+            world_space: ps["moveWithTransform"].as_i64() == Some(1),
+            trail: (on("TrailModule") && ps["TrailModule"]["mode"].as_i64().unwrap_or(0) == 0)
+                .then(|| {
+                    let t = &ps["TrailModule"];
+                    let color = |k: &str| {
+                        (t[k]["minMaxState"].as_i64().unwrap_or(0) != 0
+                            || t[k]["maxColor"]["r"].is_number())
+                        .then(|| ColorSpec::parse(&t[k]))
+                    };
+                    TrailDef {
+                        lifetime: Curve::parse(&t["lifetime"]),
+                        min_distance: fv(t, "minVertexDistance"),
+                        width: Curve::parse(&t["widthOverTrail"]),
+                        size_affects_width: bv(t, "sizeAffectsWidth"),
+                        inherit_color: bv(t, "inheritParticleColor"),
+                        color_over_trail: color("colorOverTrail"),
+                        color_over_lifetime: color("colorOverLifetime"),
+                    }
+                }),
+            size_by_speed: on("SizeBySpeedModule").then(|| {
+                let m = &ps["SizeBySpeedModule"];
+                let y = bv(m, "separateAxes").then(|| Curve::parse(&m["y"]));
+                (
+                    Curve::parse(&m["curve"]),
+                    y,
+                    [fv(&m["range"], "x"), fv(&m["range"], "y")],
+                )
+            }),
+            rotation_by_speed: on("RotationBySpeedModule").then(|| {
+                let m = &ps["RotationBySpeedModule"];
+                (
+                    Curve::parse(&m["curve"]),
+                    [fv(&m["range"], "x"), fv(&m["range"], "y")],
+                )
+            }),
+            sub_birth: if bv(&ps["SubModule"], "enabled") {
+                ps["SubModule"]["subEmitters"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|e| e["type"].as_i64().unwrap_or(0) == 0)
+                    .filter_map(|e| e["emitter"]["m_PathID"].as_i64().filter(|&id| id != 0))
+                    .collect()
+            } else {
+                Vec::new()
+            },
             noise: on("NoiseModule").then(|| {
                 let n = &ps["NoiseModule"];
                 (
@@ -414,6 +566,17 @@ impl SystemDef {
             velocity_scale: r.get("m_VelocityScale").map_or(0.0, f),
             max_particle_size: r.get("m_MaxParticleSize").map_or(0.5, f),
             sorting_order: r["m_SortingOrder"].as_i64().unwrap_or(0) as i32,
+            custom1x: {
+                let cd = &ps["CustomDataModule"];
+                let streamed = r["m_VertexStreams"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|v| v.as_i64() == Some(CUSTOM1X_STREAM)));
+                (streamed
+                    && bv(cd, "enabled")
+                    && cd["mode0"].as_i64() == Some(1)
+                    && cd["vectorComponentCount0"].as_i64().unwrap_or(0) >= 1)
+                    .then(|| Curve::parse(&cd["vector0_0"]))
+            },
             seed,
         }
     }
@@ -422,7 +585,164 @@ impl SystemDef {
 // ------------------------------------------------------------------ runtime
 
 /// A particle quad: corners (local frame, world units), UV rect (v up), colour.
-pub type Quad = ([[f32; 2]; 4], [f32; 4], [f32; 4]);
+/// Corners (a degenerate fourth corner for a mesh triangle), per-corner UVs (v up, in the
+/// texture sheet), colour, and the particle's `Custom1.x` vertex stream (0 without one).
+pub type Quad = ([[f32; 2]; 4], [[f32; 2]; 4], [f32; 4], f32);
+
+/// Particle mesh geometry (`ParticleSystemRenderer.m_Mesh` in Mesh render mode).
+#[derive(Debug, Clone)]
+pub struct Mesh {
+    pub verts: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub tris: Vec<[u32; 3]>,
+}
+
+impl Mesh {
+    /// Unity's built-in Quad (`unity default resources` 10210): 1×1 in XY, facing −z.
+    pub fn quad() -> Self {
+        Mesh {
+            verts: vec![
+                [-0.5, -0.5, 0.0],
+                [0.5, -0.5, 0.0],
+                [0.5, 0.5, 0.0],
+                [-0.5, 0.5, 0.0],
+            ],
+            uvs: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            tris: vec![[0, 1, 2], [0, 2, 3]],
+        }
+    }
+
+    /// Unity's built-in Cube (10202): the unit cube, each face UV-mapped 0–1.
+    pub fn cube() -> Self {
+        let mut m = Mesh {
+            verts: Vec::new(),
+            uvs: Vec::new(),
+            tris: Vec::new(),
+        };
+        // (normal axis, sign)
+        for (axis, sign) in [
+            (0, 1.0),
+            (0, -1.0),
+            (1, 1.0),
+            (1, -1.0),
+            (2, 1.0),
+            (2, -1.0),
+        ] {
+            let base = m.verts.len() as u32;
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            for (a, b) in [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)] {
+                let mut p = [0.0f32; 3];
+                p[axis] = 0.5 * sign;
+                p[u] = a;
+                p[v] = b;
+                m.verts.push(p);
+                m.uvs.push([a + 0.5, b + 0.5]);
+            }
+            m.tris.push([base, base + 1, base + 2]);
+            m.tris.push([base, base + 2, base + 3]);
+        }
+        m
+    }
+
+    /// A serialized Unity `Mesh` (uncompressed, float32 / float16 positions and UV0 in stream 0,
+    /// 16- or 32-bit indices). `None` for layouts this reader does not handle.
+    pub fn from_unity(m: &Value) -> Option<Self> {
+        if m["m_MeshCompression"].as_i64().unwrap_or(0) != 0 {
+            return None;
+        }
+        let vd = &m["m_VertexData"];
+        let count = vd["m_VertexCount"].as_u64()? as usize;
+        let data: Vec<u8> = vd["m_DataSize"]
+            .as_array()?
+            .iter()
+            .map(|b| b.as_u64().unwrap_or(0) as u8)
+            .collect();
+        let chans: Vec<(u64, u64, u64, u64)> = vd["m_Channels"]
+            .as_array()?
+            .iter()
+            .map(|c| {
+                (
+                    c["stream"].as_u64().unwrap_or(0),
+                    c["offset"].as_u64().unwrap_or(0),
+                    c["format"].as_u64().unwrap_or(0),
+                    c["dimension"].as_u64().unwrap_or(0) & 0x0f,
+                )
+            })
+            .collect();
+        let size = |fmt: u64| match fmt {
+            0 => 4,
+            1 => 2,
+            _ => 0,
+        };
+        if chans
+            .iter()
+            .any(|c| c.3 > 0 && (c.0 != 0 || size(c.2) == 0))
+        {
+            return None;
+        }
+        let stride = chans
+            .iter()
+            .filter(|c| c.3 > 0)
+            .map(|c| c.1 + size(c.2) * c.3)
+            .max()? as usize;
+        let read = |i: usize, ch: usize, k: usize| -> f32 {
+            let c = chans[ch];
+            let o = i * stride + c.1 as usize + k * size(c.2) as usize;
+            match c.2 {
+                0 => f32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]),
+                _ => half_to_f32(u16::from_le_bytes([data[o], data[o + 1]])),
+            }
+        };
+        if data.len() < stride * count || chans.first()?.3 < 3 {
+            return None;
+        }
+        let verts = (0..count)
+            .map(|i| [read(i, 0, 0), read(i, 0, 1), read(i, 0, 2)])
+            .collect();
+        let uvs = if chans.get(4).is_some_and(|c| c.3 >= 2) {
+            (0..count).map(|i| [read(i, 4, 0), read(i, 4, 1)]).collect()
+        } else {
+            vec![[0.0, 0.0]; count]
+        };
+        let ib: Vec<u8> = m["m_IndexBuffer"]
+            .as_array()?
+            .iter()
+            .map(|b| b.as_u64().unwrap_or(0) as u8)
+            .collect();
+        let idx: Vec<u32> = if m["m_IndexFormat"].as_i64().unwrap_or(0) == 1 {
+            ib.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
+                .collect()
+        } else {
+            ib.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u32::from(u16::from_le_bytes(*c)))
+                .collect()
+        };
+        let tris = idx
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .filter(|t| t.iter().all(|&v| (v as usize) < count))
+            .copied()
+            .collect();
+        Some(Mesh { verts, uvs, tris })
+    }
+}
+
+fn half_to_f32(h: u16) -> f32 {
+    let s = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let e = i32::from((h >> 10) & 0x1f);
+    let m = f32::from(h & 0x3ff);
+    match e {
+        0 => s * m * (1.0 / 16_777_216.0),
+        31 => s * f32::INFINITY,
+        _ => s * (1.0 + m / 1024.0) * f32::from_bits(((e - 15 + 127) as u32) << 23),
+    }
+}
 
 #[derive(Debug, Clone)]
 struct Particle {
@@ -432,9 +752,13 @@ struct Particle {
     cur_vel: [f32; 3],
     age: f32,
     life: f32,
-    size: [f32; 2],
+    /// x, y, z (z = x without 3D size)
+    size: [f32; 3],
     rot: f32,
+    rot_xy: [f32; 2],
     color: [f32; 4],
+    /// Trail points: (position, particle age when recorded), oldest first.
+    trail: Vec<([f32; 3], f32)>,
     /// Fixed per-particle randoms for curves in "random between" modes.
     rnd: [f32; 8],
     seed: u32,
@@ -443,6 +767,9 @@ struct Particle {
 #[derive(Debug, Clone)]
 pub struct SystemState {
     particles: Vec<Particle>,
+    /// The loop the system was in when it last stepped as looping: turning `looping` off
+    /// lets that loop finish.
+    last_loop: Option<u32>,
     rng: u32,
     /// Time since `Play` (includes the start delay), `None` while not playing.
     time: Option<f32>,
@@ -451,6 +778,26 @@ pub struct SystemState {
     emit_acc: f32,
     /// Bursts fired in the current loop: (loop index, burst, cycle).
     fired: Vec<(u32, usize, u32)>,
+    /// This system is another's Birth sub-emitter: it emits only from `subs`.
+    pub sub_only: bool,
+    /// Birth sub-emitter sources: one per live parent particle.
+    subs: Vec<SubSource>,
+    /// World simulation space: the emitter's current position (world units, in the effect's
+    /// frame), added to new particles.
+    pub emitter: [f32; 3],
+}
+
+/// A Birth sub-emitter instance riding on a parent particle (`SubModule`, type Birth): the
+/// system's emission (rate and bursts on its own clock) from the parent's position, until the
+/// parent dies.
+#[derive(Debug, Clone)]
+struct SubSource {
+    parent: u32,
+    origin: [f32; 3],
+    time: f32,
+    emit_acc: f32,
+    fired: Vec<(u32, usize, u32)>,
+    alive: bool,
 }
 
 fn next_u32(s: &mut u32) -> u32 {
@@ -500,6 +847,7 @@ fn norm(v: [f32; 3]) -> [f32; 3] {
 impl SystemState {
     pub fn new(def: &SystemDef, seed: u32) -> Self {
         SystemState {
+            last_loop: None,
             particles: Vec::new(),
             rng: (def.seed ^ seed.wrapping_mul(2654435761)) | 1,
             time: None,
@@ -507,6 +855,40 @@ impl SystemState {
             emitting: false,
             emit_acc: 0.0,
             fired: Vec::new(),
+            sub_only: false,
+            subs: Vec::new(),
+            emitter: [0.0; 3],
+        }
+    }
+
+    /// (seed, position) of every live particle, for sub-emitters.
+    pub fn particle_origins(&self) -> Vec<(u32, [f32; 3])> {
+        self.particles.iter().map(|p| (p.seed, p.pos)).collect()
+    }
+
+    /// Keeps one Birth sub-emitter source per live parent particle (new parents start one,
+    /// dead ones stop emitting) and moves them with their parents.
+    pub fn sync_subs(&mut self, def: &SystemDef, parents: &[(u32, [f32; 3])]) {
+        for s in &mut self.subs {
+            match parents.iter().find(|(seed, _)| *seed == s.parent) {
+                Some((_, pos)) => s.origin = *pos,
+                None => s.alive = false,
+            }
+        }
+        self.subs.retain(|s| s.alive);
+        for &(seed, pos) in parents {
+            if !self.subs.iter().any(|s| s.parent == seed) {
+                // the sub system's own start delay counts from the parent's birth
+                let delay = def.start_delay.eval(unit(&mut self.rng), 0.0);
+                self.subs.push(SubSource {
+                    parent: seed,
+                    origin: pos,
+                    time: -delay,
+                    emit_acc: 0.0,
+                    fired: Vec::new(),
+                    alive: true,
+                });
+            }
         }
     }
 
@@ -540,16 +922,65 @@ impl SystemState {
     }
 
     pub fn is_alive(&self, def: &SystemDef) -> bool {
-        if !self.particles.is_empty() {
+        if !self.particles.is_empty() || !self.subs.is_empty() {
             return true;
         }
         match self.time {
-            Some(t) => self.emitting && (def.looping || t < self.delay + def.duration),
+            Some(t) => {
+                let loops = self.last_loop.map_or(1, |l| l + 1) as f32;
+                self.emitting && (def.looping || t < self.delay + def.duration * loops)
+            }
             None => false,
         }
     }
 
     pub fn step(&mut self, def: &SystemDef, dt: f32) {
+        if self.sub_only {
+            // driven by the parent: particles age, sources emit on their own clocks
+            let dt = dt * def.sim_speed;
+            self.update(def, dt);
+            let mut subs = std::mem::take(&mut self.subs);
+            for s in &mut subs {
+                s.time += dt;
+                if s.time < 0.0 {
+                    continue;
+                }
+                let t1 = s.time;
+                let dur = def.duration.max(1e-4);
+                let (loop_i, in_loop) = if def.looping {
+                    ((t1 / dur) as u32, t1 % dur)
+                } else if t1 > dur {
+                    continue;
+                } else {
+                    (0, t1)
+                };
+                let sys_t = in_loop / dur;
+                s.emit_acc += def.rate.eval(unit(&mut self.rng), sys_t) * dt;
+                while s.emit_acc >= 1.0 {
+                    s.emit_acc -= 1.0;
+                    self.spawn_at(def, sys_t, s.origin);
+                }
+                for (bi, b) in def.bursts.iter().enumerate() {
+                    for c in 0..b.cycles.max(1) {
+                        let at = b.time + b.interval * c as f32;
+                        if in_loop + 1e-6 < at || s.fired.contains(&(loop_i, bi, c)) {
+                            continue;
+                        }
+                        s.fired.push((loop_i, bi, c));
+                        if unit(&mut self.rng) > b.probability {
+                            continue;
+                        }
+                        let n = b.count.eval(unit(&mut self.rng), 0.0).round().max(0.0) as u32;
+                        for _ in 0..n {
+                            self.spawn_at(def, sys_t, s.origin);
+                        }
+                    }
+                }
+                s.fired.retain(|&(l, _, _)| l + 1 >= loop_i);
+            }
+            self.subs = subs;
+            return;
+        }
         let Some(time) = self.time else { return };
         let dt = dt * def.sim_speed;
         let t1 = time + dt;
@@ -561,19 +992,25 @@ impl SystemState {
         let dur = def.duration.max(1e-4);
         let local = t1 - self.delay;
         let (loop_i, in_loop) = if def.looping {
-            ((local / dur) as u32, local % dur)
-        } else if local > dur {
-            self.emitting = false;
-            return;
+            let l = (local / dur) as u32;
+            self.last_loop = Some(l);
+            (l, local % dur)
         } else {
-            (0, local)
+            let l = self.last_loop.unwrap_or(0);
+            if local > dur * (l + 1) as f32 {
+                self.emitting = false;
+                return;
+            }
+            (l, local - dur * l as f32)
         };
         // rate over time, sampled at the loop's normalized time
         let rate = def.rate.eval(unit(&mut self.rng), in_loop / dur);
         self.emit_acc += rate * dt;
+        // the main module's curves and gradients are sampled at the system's normalized time
+        let sys_t = in_loop / dur;
         while self.emit_acc >= 1.0 {
             self.emit_acc -= 1.0;
-            self.spawn(def);
+            self.spawn(def, sys_t);
         }
         for (bi, b) in def.bursts.iter().enumerate() {
             for c in 0..b.cycles.max(1) {
@@ -587,14 +1024,23 @@ impl SystemState {
                 }
                 let n = b.count.eval(unit(&mut self.rng), 0.0).round().max(0.0) as u32;
                 for _ in 0..n {
-                    self.spawn(def);
+                    self.spawn(def, sys_t);
                 }
             }
         }
         self.fired.retain(|&(l, _, _)| l + 1 >= loop_i);
     }
 
-    fn spawn(&mut self, def: &SystemDef) {
+    fn spawn(&mut self, def: &SystemDef, sys_t: f32) {
+        let origin = if def.world_space {
+            self.emitter
+        } else {
+            [0.0; 3]
+        };
+        self.spawn_at(def, sys_t, origin);
+    }
+
+    fn spawn_at(&mut self, def: &SystemDef, sys_t: f32, origin: [f32; 3]) {
         if self.particles.len() >= def.max_particles {
             return;
         }
@@ -603,21 +1049,29 @@ impl SystemState {
         for x in &mut rnd {
             *x = unit(r);
         }
-        let life = def.lifetime.eval(unit(r), 0.0).max(1e-3);
-        let speed = def.speed.eval(unit(r), 0.0);
-        let sx = def.size.eval(unit(r), 0.0);
+        let life = def.lifetime.eval(unit(r), sys_t).max(1e-3);
+        let speed = def.speed.eval(unit(r), sys_t);
+        let sx = def.size.eval(unit(r), sys_t);
         let sy = def
             .size3d
             .as_ref()
-            .map_or(sx, |(y, _)| y.eval(unit(r), 0.0));
+            .map_or(sx, |(y, _)| y.eval(unit(r), sys_t));
         let (pos, dir) = if def.shape.enabled {
             shape_sample(&def.shape, r)
         } else {
             ([0.0; 3], [0.0, 0.0, 1.0])
         };
+        let pos = [pos[0] + origin[0], pos[1] + origin[1], pos[2] + origin[2]];
         let vel = [dir[0] * speed, dir[1] * speed, dir[2] * speed];
-        let color = def.color.eval(unit(r), 0.0);
-        let rot = def.rotation.eval(unit(r), 0.0);
+        let color = def.color.eval(unit(r), sys_t);
+        let sz = def
+            .size3d
+            .as_ref()
+            .map_or(sx, |(_, z)| z.eval(unit(r), sys_t));
+        let rot = def.rotation.eval(unit(r), sys_t);
+        let rot_xy = def.rotation_xy.as_ref().map_or([0.0; 2], |[x, y]| {
+            [x.eval(unit(r), sys_t), y.eval(unit(r), sys_t)]
+        });
         let seed = next_u32(r);
         self.particles.push(Particle {
             pos,
@@ -625,9 +1079,11 @@ impl SystemState {
             cur_vel: vel,
             age: 0.0,
             life,
-            size: [sx, sy],
+            size: [sx, sy, sz],
             rot,
+            rot_xy,
             color,
+            trail: Vec::new(),
             rnd,
             seed,
         });
@@ -663,22 +1119,49 @@ impl SystemState {
                     v[2] += n.2 * k;
                 }
             }
+            // Limit Velocity acts on the total velocity (base + velocity over lifetime); the
+            // excess is taken out of the base velocity. Dampen is the fraction removed per
+            // 1/30 s step (the Unity runtime's own step is not reversed: approximation).
             if let Some((limit, dampen)) = &def.clamp {
                 let lim = limit.eval(p.rnd[6], t).max(1e-5);
-                let mag = (p.vel[0] * p.vel[0] + p.vel[1] * p.vel[1] + p.vel[2] * p.vel[2]).sqrt();
+                let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
                 if mag > lim {
-                    let f = 1.0 - (1.0 - lim / mag) * dampen.clamp(0.0, 1.0);
-                    for c in &mut p.vel {
-                        *c *= f;
+                    let per_step = 1.0 - (1.0 - lim / mag) * dampen.clamp(0.0, 1.0);
+                    let f = sse_core::det_math::powf(per_step.max(0.0), dt * 30.0);
+                    for i in 0..3 {
+                        let limited = v[i] * f;
+                        p.vel[i] += limited - v[i];
+                        v[i] = limited;
                     }
                 }
             }
             for i in 0..3 {
                 p.pos[i] += v[i] * dt;
             }
+            if let Some(tr) = &def.trail {
+                let keep = tr.lifetime.eval(p.rnd[3], t) * p.life;
+                let far = p.trail.last().is_none_or(|(q, _)| {
+                    let d = [p.pos[0] - q[0], p.pos[1] - q[1], p.pos[2] - q[2]];
+                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() >= tr.min_distance
+                });
+                if far {
+                    p.trail.push((p.pos, p.age));
+                }
+                let age = p.age;
+                p.trail.retain(|(_, a)| age - a <= keep);
+            }
             p.cur_vel = v;
             if let Some(w) = &def.rotation_ol {
                 p.rot += w.eval(p.rnd[7], t) * dt;
+            }
+            if let Some((w, [lo, hi])) = &def.rotation_by_speed {
+                let sp = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                let k = ((sp - lo) / (hi - lo).max(1e-6)).clamp(0.0, 1.0);
+                p.rot += w.eval(p.rnd[7], k) * dt;
+            }
+            if let Some([x, y]) = &def.rotation_ol_xy {
+                p.rot_xy[0] += x.eval(p.rnd[7], t) * dt;
+                p.rot_xy[1] += y.eval(p.rnd[7], t) * dt;
             }
             true
         });
@@ -686,9 +1169,94 @@ impl SystemState {
 
     /// Quads in the emitter's local frame (world units): corners (−,−) (+,−) (+,+) (−,+),
     /// UV rect (u0, v0, u1, v1 with v up) and colour. `stretch` directions are in local space.
-    pub fn quads(&self, def: &SystemDef) -> Vec<Quad> {
-        let mut out = Vec::with_capacity(self.particles.len());
+    /// Trail ribbons (Particles mode) as quads, one per segment: u runs along the trail
+    /// (Stretch texture mode, head 0 → tail 1), v across it.
+    pub fn trail_quads(&self, def: &SystemDef, rot: Option<[[f32; 3]; 3]>) -> Vec<Quad> {
+        let Some(tr) = &def.trail else {
+            return Vec::new();
+        };
+        let turn = |v: [f32; 3]| match rot {
+            Some(m) => [
+                m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+                m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+            ],
+            None => [v[0], v[1]],
+        };
+        let mut out = Vec::new();
         for p in &self.particles {
+            let t = (p.age / p.life).clamp(0.0, 1.0);
+            // head first: the particle, then its recorded points newest → oldest
+            let mut pts: Vec<[f32; 2]> = vec![turn(p.pos)];
+            pts.extend(p.trail.iter().rev().map(|(q, _)| turn(*q)));
+            pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6);
+            if pts.len() < 2 {
+                continue;
+            }
+            let mut base = if tr.inherit_color { p.color } else { [1.0; 4] };
+            if let Some(c) = &tr.color_over_lifetime {
+                let k = c.eval(p.rnd[0], t);
+                for i in 0..4 {
+                    base[i] *= k[i];
+                }
+            }
+            let size = if tr.size_affects_width {
+                p.size[0]
+            } else {
+                1.0
+            };
+            let n = (pts.len() - 1) as f32;
+            let width = |u: f32| tr.width.eval(p.rnd[2], u) * size;
+            let color = |u: f32| {
+                let mut c = base;
+                if let Some(ct) = &tr.color_over_trail {
+                    let k = ct.eval(p.rnd[0], u);
+                    for i in 0..4 {
+                        c[i] *= k[i];
+                    }
+                }
+                c
+            };
+            for i in 0..pts.len() - 1 {
+                let (a, b) = (pts[i], pts[i + 1]);
+                let (ua, ub) = (i as f32 / n, (i + 1) as f32 / n);
+                let d = [b[0] - a[0], b[1] - a[1]];
+                let l = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-6);
+                let nrm = [-d[1] / l, d[0] / l];
+                let (wa, wb) = (width(ua) * 0.5, width(ub) * 0.5);
+                out.push((
+                    [
+                        [a[0] - nrm[0] * wa, a[1] - nrm[1] * wa],
+                        [b[0] - nrm[0] * wb, b[1] - nrm[1] * wb],
+                        [b[0] + nrm[0] * wb, b[1] + nrm[1] * wb],
+                        [a[0] + nrm[0] * wa, a[1] + nrm[1] * wa],
+                    ],
+                    [[ua, 0.0], [ub, 0.0], [ub, 1.0], [ua, 1.0]],
+                    color((ua + ub) * 0.5),
+                    0.0,
+                ));
+            }
+        }
+        out
+    }
+
+    /// Quads in the emitter's local frame (world units), with the local simulation space turned by `rot` (row-major 3×3)
+    /// before the orthographic projection: positions and stretch directions follow the
+    /// emitter's rotation, billboard corners keep facing the camera.
+    pub fn quads_rotated(&self, def: &SystemDef, rot: Option<[[f32; 3]; 3]>) -> Vec<Quad> {
+        let turn = |v: [f32; 3]| match rot {
+            Some(m) => [
+                m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+                m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+                m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+            ],
+            None => v,
+        };
+        let mut out = Vec::with_capacity(self.particles.len());
+        for p0 in &self.particles {
+            let mut moved = p0.clone();
+            moved.pos = turn(p0.pos);
+            moved.cur_vel = turn(p0.cur_vel);
+            let p = &moved;
             let t = (p.age / p.life).clamp(0.0, 1.0);
             let mut c = p.color;
             if let Some(ol) = &def.color_ol {
@@ -700,12 +1268,23 @@ impl SystemState {
             if c[3] <= 0.002 {
                 continue;
             }
-            let (mut w, mut h) = (p.size[0], p.size[1]);
+            let (mut w, mut h, mut d) = (p.size[0], p.size[1], p.size[2]);
             if let Some((x, y)) = &def.size_ol {
                 let kx = x.eval(p.rnd[1], t);
                 let ky = y.as_ref().map_or(kx, |y| y.eval(p.rnd[1], t));
                 w *= kx;
                 h *= ky;
+                d *= kx;
+            }
+            if let Some((x, y, [lo, hi])) = &def.size_by_speed {
+                let v = p.cur_vel;
+                let sp = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                let k = ((sp - lo) / (hi - lo).max(1e-6)).clamp(0.0, 1.0);
+                let kx = x.eval(p.rnd[1], k);
+                let ky = y.as_ref().map_or(kx, |y| y.eval(p.rnd[1], k));
+                w *= kx;
+                h *= ky;
+                d *= kx;
             }
             match def.render_mode {
                 // `maxParticleSize` is a fraction of the viewport height (2 units)
@@ -718,6 +1297,53 @@ impl SystemState {
                 RenderMode::Mesh => {}
             }
             let uv = sheet_uv(def, p, t);
+            let cell = |u: f32, v: f32| [uv[0] + (uv[2] - uv[0]) * u, uv[1] + (uv[3] - uv[1]) * v];
+            let custom = def.custom1x.as_ref().map_or(0.0, |k| k.eval(p.rnd[4], t));
+            // 3D: billboards with a 3D rotation and every mesh particle. The vertices are scaled
+            // by the particle size, rotated (Unity `Quaternion.Euler` order, the same sign as the
+            // 2D billboard rotation) and projected by the orthographic scenario camera.
+            let three_d = def.render_mode == RenderMode::Mesh
+                || (def.render_mode == RenderMode::Billboard && p.rot_xy != [0.0; 2]);
+            if three_d {
+                let quad = Mesh::quad();
+                let (mesh, scale) = match def.render_mode {
+                    RenderMode::Mesh => (def.mesh.as_deref().unwrap_or(&quad), [w, h, d]),
+                    _ => (&quad, [w, h, 1.0]),
+                };
+                let deg = [
+                    -p.rot_xy[0].to_degrees(),
+                    -p.rot_xy[1].to_degrees(),
+                    -p.rot.to_degrees(),
+                ];
+                let proj: Vec<[f32; 2]> = mesh
+                    .verts
+                    .iter()
+                    .map(|v| {
+                        let r = rot_euler([v[0] * scale[0], v[1] * scale[1], v[2] * scale[2]], deg);
+                        [p.pos[0] + r[0], p.pos[1] + r[1]]
+                    })
+                    .collect();
+                let uvs: Vec<[f32; 2]> = mesh.uvs.iter().map(|t| cell(t[0], t[1])).collect();
+                if mesh.tris == [[0, 1, 2], [0, 2, 3]] && proj.len() == 4 {
+                    out.push((
+                        [proj[0], proj[1], proj[2], proj[3]],
+                        [uvs[0], uvs[1], uvs[2], uvs[3]],
+                        c,
+                        custom,
+                    ));
+                } else {
+                    for &[a, b, e] in &mesh.tris {
+                        let (a, b, e) = (a as usize, b as usize, e as usize);
+                        out.push((
+                            [proj[a], proj[b], proj[e], proj[e]],
+                            [uvs[a], uvs[b], uvs[e], uvs[e]],
+                            c,
+                            custom,
+                        ));
+                    }
+                }
+                continue;
+            }
             let corners = match def.render_mode {
                 RenderMode::Stretch => {
                     // width = size.x; length = size.y × lengthScale + speed × velocityScale,
@@ -749,7 +1375,17 @@ impl SystemState {
                     [q(-hw, -hh), q(hw, -hh), q(hw, hh), q(-hw, hh)]
                 }
             };
-            out.push((corners, uv, c));
+            out.push((
+                corners,
+                [
+                    cell(0.0, 0.0),
+                    cell(1.0, 0.0),
+                    cell(1.0, 1.0),
+                    cell(0.0, 1.0),
+                ],
+                c,
+                custom,
+            ));
         }
         out
     }
@@ -838,6 +1474,29 @@ fn shape_sample(s: &Shape, r: &mut u32) -> ([f32; 3], [f32; 3]) {
             let (ca, sa) = (cosf(a), sinf(a));
             ([ca * rr, sa * rr, 0.0], [ca, sa, 0.0])
         }
+        // donut: a torus around the XY ring, emitting away from the tube's centre line
+        17 => {
+            let a = unit(r) * s.arc.to_radians();
+            let b = unit(r) * std::f32::consts::TAU;
+            let tube = s.donut_radius * shell(r, s.radius_thickness).sqrt();
+            let (ca, sa, cb, sb) = (cosf(a), sinf(a), cosf(b), sinf(b));
+            let off = [cb * ca * tube, cb * sa * tube, sb * tube];
+            let l = (off[0] * off[0] + off[1] * off[1] + off[2] * off[2])
+                .sqrt()
+                .max(1e-6);
+            (
+                [ca * s.radius + off[0], sa * s.radius + off[1], off[2]],
+                [off[0] / l, off[1] / l, off[2] / l],
+            )
+        }
+        // sprite: uniform over the sprite's rect, along its normal
+        19 | 20 => {
+            let [w, h] = s.sprite_size.unwrap_or([1.0, 1.0]);
+            (
+                [(unit(r) - 0.5) * w, (unit(r) - 0.5) * h, 0.0],
+                [0.0, 0.0, 1.0],
+            )
+        }
         // single-sided edge: a line along x, emitting along +y
         12 => (
             [(unit(r) * 2.0 - 1.0) * s.radius, 0.0, 0.0],
@@ -924,6 +1583,22 @@ mod tests {
         assert!(!st.emitting);
         // speed 1 along +z for ~1-2 s
         assert!(st.particles.iter().all(|p| p.pos[2] > 0.9));
+    }
+
+    #[test]
+    fn random_color_samples_the_gradient_at_the_particles_random() {
+        // `hologram` prefab triangles: fixed-mode keys cyan / yellow / magenta
+        let v: Value = serde_json::from_str(
+            r#"{"minMaxState": 4, "maxGradient": {"m_Mode": 1, "m_NumColorKeys": 3, "m_NumAlphaKeys": 1,
+                "ctime0": 21588, "ctime1": 42791, "ctime2": 65535, "atime0": 0,
+                "key0": {"r": 0, "g": 1, "b": 1, "a": 1}, "key1": {"r": 1, "g": 1, "b": 0, "a": 1},
+                "key2": {"r": 1, "g": 0, "b": 1, "a": 1}}}"#,
+        )
+        .unwrap();
+        let c = ColorSpec::parse(&v);
+        assert_eq!(c.eval(0.1, 0.0)[..3], [0.0, 1.0, 1.0]);
+        assert_eq!(c.eval(0.5, 0.0)[..3], [1.0, 1.0, 0.0]);
+        assert_eq!(c.eval(0.9, 0.0)[..3], [1.0, 0.0, 1.0]);
     }
 
     #[test]

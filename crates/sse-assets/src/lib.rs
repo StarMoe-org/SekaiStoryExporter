@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 pub use ripper_format::episode::{self, EpisodeIndex};
 pub use ripper_format::motion::{self, SseMotion};
 
+pub mod acb;
 mod audio;
 mod model;
 pub mod remote;
@@ -252,6 +253,16 @@ impl Library {
 
     pub fn load_png(&self, library_path: &str) -> Result<image::RgbaImage> {
         load_png(&self.path(library_path))
+    }
+
+    /// The cue structure (layers, blocks) of the BGM whose waveforms are `files`, read from the
+    /// `.acb` next to them; `None` when there is no `.acb` or the cue is a plain one.
+    pub fn cue_structure(&self, files: &[String], cue: &str) -> Option<acb::CueStructure> {
+        let first = files.first()?;
+        let (dir, rest) = first.rsplit_once('/')?.0.rsplit_once('/')?;
+        let stem = rest.strip_suffix(".audio")?;
+        let bytes = std::fs::read(self.path(&format!("{dir}/{stem}.acb"))).ok()?;
+        acb::cue_structure(&bytes, cue, dir, stem)
     }
 
     pub fn load_wav(&self, library_path: &str) -> Result<Pcm> {

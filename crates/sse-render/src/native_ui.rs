@@ -58,6 +58,16 @@ pub mod layout {
     /// `MenuIcon`: 52×12, centred.
     pub const MENU_ICON: [f32; 4] = [1830.0, 58.0, 52.0, 12.0];
     pub const MENU_ICON_COLOR: [f32; 4] = [0.266_666_68, 0.266_666_68, 0.4, 1.0];
+    /// `AnswerChoiceDialog` (CN `resources.assets|102548`): `WindowRoot` centre-anchored at
+    /// (0, −40); `Answer0` at (460, 40) and `Answer1` at (−460, 40) inside it, 520×96.
+    pub const ANSWER_WINDOW_Y: f32 = -40.0;
+    pub const ANSWER_POS: [[f32; 2]; 2] = [[460.0, 40.0], [-460.0, 40.0]];
+    pub const ANSWER_SIZE: [f32; 2] = [520.0, 96.0];
+    /// `Answer*/Text`: stretched with sizeDelta (−48, 0); FOT-RodinNTLGPro-EB 32 (auto-size
+    /// up to 32), centre / middle, `base_dbl` (0.267, 0.267, 0.4).
+    pub const ANSWER_TEXT_INSET: f32 = 24.0;
+    pub const ANSWER_TEXT_SIZE: f32 = 32.0;
+    pub const ANSWER_TEXT_COLOR: [f32; 4] = [0.266_666_68, 0.266_666_68, 0.4, 1.0];
     /// `bg_base_wh` colour of the telop band and the place-info panel.
     pub const BAND_COLOR: [f32; 4] = [0.266_666_68, 0.266_666_68, 0.4, 0.8];
     /// `ScenarioTelop/.../Text`: 1040×120 centred, 44, centre / middle.
@@ -110,6 +120,9 @@ pub struct NativeUi {
     auto_icon: Option<gpu::Image>,
     menu: Option<gpu::Image>,
     menu_icon: Option<gpu::Image>,
+    /// `AnswerChoiceDialog/WindowRoot/Answer*/ButtonImage`: `btn_round_h80_wh` (106×96,
+    /// border L51 R51) sliced to 520 wide; optional (older UI kits lack it).
+    answer: Option<gpu::Image>,
     /// White 256×1 ramps for `GradientAlpha` edges: alpha 0 → 1 and 1 → 0.
     ramp: [gpu::Image; 2],
     pub missing: Vec<&'static str>,
@@ -137,6 +150,9 @@ impl NativeUi {
             .map(|i| gpu.image(&image::imageops::rotate90(&i)));
         let menu = load(dir, "btn_circle_h80_wh", &mut missing).map(|i| gpu.image(&i));
         let menu_icon = load(dir, "icon_menu_story_wh", &mut missing).map(|i| gpu.image(&i));
+        let answer = sse_assets::load_png(&dir.join("btn_round_h80_wh.png"))
+            .ok()
+            .map(|i| gpu.image(&slice_h(&i, 51, 51, layout::ANSWER_SIZE[0] as u32)));
         let ramp = |up: bool| {
             RgbaImage::from_fn(256, 1, |x, _| {
                 let a = if up { x } else { 255 - x } as u8;
@@ -151,6 +167,7 @@ impl NativeUi {
             auto_icon,
             menu,
             menu_icon,
+            answer,
             ramp,
             missing,
         }
@@ -202,6 +219,40 @@ impl NativeUi {
                 [1.0, 1.0, 1.0, alpha],
             ));
         }
+    }
+
+    /// `AnswerChoiceDialog` buttons at window scale `scale`; their rects (target pixels) in
+    /// answer order, for the labels.
+    pub fn choice(
+        &self,
+        out: &mut Vec<QuadDraw>,
+        k: f32,
+        screen: [f32; 2],
+        count: usize,
+        scale: f32,
+    ) -> Vec<[f32; 4]> {
+        let [bw, bh] = layout::ANSWER_SIZE;
+        let rects: Vec<[f32; 4]> = layout::ANSWER_POS
+            .iter()
+            .take(count)
+            .map(|&[x, y]| {
+                // WindowRoot (0, −40) scaled about its centre; canvas y up
+                let (cx, cy) = (x * scale, layout::ANSWER_WINDOW_Y + y * scale);
+                let (w, h) = (bw * scale * k, bh * scale * k);
+                [
+                    screen[0] * 0.5 + cx * k - w * 0.5,
+                    screen[1] * 0.5 - cy * k - h * 0.5,
+                    w,
+                    h,
+                ]
+            })
+            .collect();
+        if let Some(img) = &self.answer {
+            for r in &rects {
+                out.push(QuadDraw::image(img.id, *r, [1.0; 4]));
+            }
+        }
+        rects
     }
 
     pub fn menu(&self, out: &mut Vec<QuadDraw>, k: f32, alpha: f32) {

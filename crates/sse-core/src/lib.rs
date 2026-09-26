@@ -19,6 +19,7 @@
 
 pub mod consts;
 pub mod det_math;
+pub mod ease;
 pub mod fs;
 pub mod rng;
 pub mod time;

@@ -40,6 +40,7 @@ SPRITES = [
     "icon_triangle_h22_wh",
     "btn_circle_h80_wh",
     "icon_menu_story_wh",
+    "btn_round_h80_wh",
 ]
 ATLAS_PREFERENCE = ["ScenarioAtlas", "CommonAtlas"]
 # Full textures (not sprites); the largest texture of each name is the one in use.

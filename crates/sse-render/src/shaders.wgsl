@@ -68,12 +68,16 @@ struct Quad {
     uv: vec4<f32>,     // u0, v0, u1, v1
     color: vec4<f32>,  // vertex colour
     dst: vec4<f32>,    // target w, h, mode, _
-    extra: vec4<f32>,  // mode 2: _Line, _SubColor.a, _SubTex.r
+    extra: vec4<f32>,  // mode 2: _Line, _SubColor.a, _SubTex.r; mode 3: _SamplingDistance
+    mask0: vec4<f32>,  // sprite mask: corner xy, inverse basis row 0
+    mask1: vec4<f32>,  // inverse basis row 1, interaction (1 inside / 2 outside), cutoff
+    mask2: vec4<f32>,  // mask sprite texture rect u0, v0, u1, v1
 };
 
 @group(0) @binding(0) var<uniform> quad: Quad;
 @group(0) @binding(1) var quad_tex: texture_2d<f32>;
 @group(0) @binding(2) var quad_smp: sampler;
+@group(0) @binding(3) var quad_mask: texture_2d<f32>;
 
 struct QuadOut {
     @builtin(position) pos: vec4<f32>,
@@ -92,6 +96,70 @@ fn quad_vs(@builtin(vertex_index) vi: u32) -> QuadOut {
 
 @fragment
 fn quad_fs(i: QuadOut) -> @location(0) vec4<f32> {
+    if (quad.dst.z > 4.5) {
+        // Sekai/UI/UIDollyZoomEffect: barrel distortion of the raw UV about the centre,
+        // uv' = 0.5 + d·(1 + _DistortionStrength·|d|²), clamped to [0, 1]; then, when
+        // _SamplingDistance > 0.001, the UIGaussianBlur cross with every tap clamped.
+        let d = i.uv - vec2<f32>(0.5);
+        let uv = clamp(d * (1.0 + quad.extra.y * dot(d, d)) + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+        var c3 = vec4<f32>(0.0);
+        if (quad.extra.x > 0.001) {
+            let texel = 1.0 / vec2<f32>(textureDimensions(quad_tex));
+            let sy = vec2<f32>(0.0, texel.y * quad.extra.x);
+            let sx = vec2<f32>(texel.x * quad.extra.x, 0.0);
+            let w = array<f32, 7>(0.036, 0.113, 0.216, 0.269, 0.216, 0.113, 0.036);
+            for (var k = 0; k < 7; k = k + 1) {
+                let o = f32(k - 3);
+                c3 = c3 + textureSampleLevel(quad_tex, quad_smp, clamp(uv + sy * o, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0) * (w[k] * 0.5);
+                c3 = c3 + textureSampleLevel(quad_tex, quad_smp, clamp(uv + sx * o, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0) * (w[k] * 0.5);
+            }
+        } else {
+            c3 = textureSampleLevel(quad_tex, quad_smp, uv, 0.0);
+        }
+        let c4 = c3 * quad.color;
+        return vec4<f32>(c4.rgb * c4.a, c4.a);
+    }
+    if (quad.dst.z > 3.5) {
+        // Sekai/Live2D/Live2DBlur: B = max(_Blur, 1); taps at (i, j) · B / _ScreenParams for
+        // i, j = -B, -B + 1, … ≤ B, weighted exp2(-0.7213·|offset|²)·0.159155 (offsets in UV)
+        let b = max(quad.extra.x, 1.0);
+        let step = vec2<f32>(b) / quad.dst.xy;
+        var acc = vec4<f32>(0.0);
+        var wsum = 0.0;
+        var x = -b;
+        loop {
+            if (x > b) { break; }
+            var y = -b;
+            loop {
+                if (y > b) { break; }
+                let o = step * vec2<f32>(x, y);
+                // exp2(x) with |x| < 2e-4 here: 1 + x·ln2 is exact to f32 (rule R-2)
+                let w = (1.0 + dot(o, o) * -0.721347511 * 0.693147181) * 0.159154981;
+                acc = acc + textureSampleLevel(quad_tex, quad_smp, i.uv + o, 0.0) * w;
+                wsum = wsum + w;
+                y = y + 1.0;
+            }
+            x = x + 1.0;
+        }
+        let c2 = acc / wsum * quad.color;
+        return vec4<f32>(c2.rgb * c2.a, c2.a);
+    }
+    if (quad.dst.z > 2.5) {
+        // Sekai/UI/UIGaussianBlur: 7 taps down the column and 7 along the row, 3 each side,
+        // `_SamplingDistance` texels apart; each line weighted (0.036 0.113 0.216 0.269 …)
+        // and the two lines averaged. Blend SrcAlpha / OneMinusSrcAlpha → premultiplied here.
+        let texel = 1.0 / vec2<f32>(textureDimensions(quad_tex));
+        let sy = vec2<f32>(0.0, texel.y * quad.extra.x);
+        let sx = vec2<f32>(texel.x * quad.extra.x, 0.0);
+        let w = array<f32, 7>(0.036, 0.113, 0.216, 0.269, 0.216, 0.113, 0.036);
+        var acc = vec4<f32>(0.0);
+        for (var k = 0; k < 7; k = k + 1) {
+            let o = f32(k - 3);
+            acc = acc + textureSampleLevel(quad_tex, quad_smp, i.uv + sy * o, 0.0) * quad.color * (w[k] * 0.5);
+            acc = acc + textureSampleLevel(quad_tex, quad_smp, i.uv + sx * o, 0.0) * quad.color * (w[k] * 0.5);
+        }
+        return vec4<f32>(acc.rgb * acc.a, acc.a);
+    }
     let t = textureSample(quad_tex, quad_smp, i.uv);
     let c = t * quad.color;
     if (quad.dst.z > 1.5) {
@@ -188,7 +256,23 @@ fn particle_vs(@location(0) px: vec2<f32>, @location(1) uv: vec2<f32>, @location
 
 // `Sekai/Particles/{Additive,AlphaBlended}`: `SV_Target0 = tex × COLOR0`; the blend state
 // does the rest.
+// `SpriteMask` interaction: the mask writes stencil where its sprite passes the alpha test
+// (`clip(a - _Cutoff)`); `VisibleInsideMask` draws only there, `VisibleOutsideMask` only
+// elsewhere.
 @fragment
 fn particle_fs(i: ParticleOut) -> @location(0) vec4<f32> {
-    return textureSample(quad_tex, quad_smp, i.uv) * i.color;
+    let c = textureSample(quad_tex, quad_smp, i.uv) * i.color;
+    if (quad.mask1.z > 0.5) {
+        let d = i.pos.xy - quad.mask0.xy;
+        let st = vec2<f32>(dot(quad.mask0.zw, d), dot(quad.mask1.xy, d));
+        var inside = false;
+        if (all(st >= vec2<f32>(0.0)) && all(st <= vec2<f32>(1.0))) {
+            let uv = vec2<f32>(mix(quad.mask2.x, quad.mask2.z, st.x), mix(quad.mask2.w, quad.mask2.y, st.y));
+            inside = textureSampleLevel(quad_mask, quad_smp, uv, 0.0).a - quad.mask1.w >= 0.0;
+        }
+        if (inside != (quad.mask1.z < 1.5)) {
+            discard;
+        }
+    }
+    return c;
 }

@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub const IR_VERSION: u32 = 3;
+pub const IR_VERSION: u32 = 4;
 
 pub type CharacterId = i32;
 
@@ -273,6 +273,10 @@ pub struct Layout {
     pub motion: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facial: Option<String>,
+    /// `CheckAndChangeCostume` (every type but `Appear`, which keeps its own): a different
+    /// costume hides the character and swaps its model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub costume: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -298,8 +302,13 @@ pub enum LayoutOp {
     Hide {
         delay: f32,
     },
+    /// Types 4 / 5 (`SetCharacterShake`): `DOShakePosition` on the model view's
+    /// `shakeTargetObject`, an empty child ("shake") that nothing renders, so nothing moves on
+    /// screen; the snippet finishes after `duration` (MoveSpeedType 0: 0.5 s, 1: 0.75 s,
+    /// else 0.25 s).
     Shake {
         axis: Axis,
+        duration: f32,
         raw: serde_json::Value,
     },
     Depth {
@@ -378,6 +387,14 @@ pub enum EffectOp {
     CameraColorOff,
     Blur {
         dir: Direction,
+    },
+    /// Effect 45 (JP): `DollyZoomParams` from "Zoom: z, Blur: b, Dist: d" and the DOTween
+    /// ease name in `StringValSub`. Without `zoom` the game logs an error and does nothing.
+    DollyZoom {
+        zoom: Option<f32>,
+        blur: Option<f32>,
+        dist: Option<f32>,
+        ease: String,
     },
     BackgroundBlur {
         on: bool,

@@ -1870,6 +1870,8 @@ dependencies = [
 name = "sse-bake"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "serde_json",
  "sse-assets",
  "sse-core",
  "sse-ir",

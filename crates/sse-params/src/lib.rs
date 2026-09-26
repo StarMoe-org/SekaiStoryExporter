@@ -20,6 +20,14 @@ pub struct ParamTable {
     pub models: Vec<String>,
     pub frames: Vec<FrameState>,
     pub audio: Vec<AudioCue>,
+    /// `SoundData` PlayMode 4: tweens of the `BGM` category AISAC `VOL_BGM_SCE` (a linear
+    /// 0–1 volume graph in the client's ACF, default 1), in start order.
+    #[serde(default)]
+    pub bgm_volume: Vec<VolumeTween>,
+    /// `SoundData` PlayMode 5: `BGM_VERTICAL` AISAC control values set on the BGM player,
+    /// (frame, value), in order.
+    #[serde(default)]
+    pub bgm_vertical: Vec<(u32, f32)>,
     /// Approximations and unsupported content, for the export report.
     pub notes: Vec<String>,
 }
@@ -57,10 +65,46 @@ pub struct FrameState {
     /// Scenario effect prefabs (`PlayScenarioEffect`) alive this frame, oldest first.
     #[serde(default)]
     pub effects: Vec<EffectState>,
+    /// `ScenarioStudio` camera and `scenarioRoot` scale (effects 42 / 43): the view is
+    /// offset by `[x, y]` reference-canvas pixels (+y up) and `scenarioRoot` (background,
+    /// characters, effects) scaled by `zoom` about the screen centre. `None` = identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<CameraView>,
+    /// Effect 23: the `AnswerChoiceDialog` while open (its `windowObject` scale).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<ChoiceState>,
     /// `ScenarioSideFadePlayer` while active: its `anchoredPosition` (reference-canvas pixels,
     /// +y up; zero = covering the screen).
     #[serde(default)]
     pub side_fade: Option<[f32; 2]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChoiceState {
+    /// Answer texts; `Answer0` is the right-hand button, `Answer1` the left.
+    pub options: Vec<String>,
+    pub scale: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraView {
+    pub x: f32,
+    pub y: f32,
+    pub zoom: f32,
+}
+
+impl CameraView {
+    /// A point of `scenarioRoot` (reference-canvas pixels from the centre, +y up) on screen,
+    /// given the root's shake offset.
+    pub fn apply(view: Option<&CameraView>, shake: [f32; 2], p: [f32; 2]) -> [f32; 2] {
+        match view {
+            Some(v) => [
+                shake[0] + v.zoom * p[0] - v.x,
+                shake[1] + v.zoom * p[1] - v.y,
+            ],
+            None => [shake[0] + p[0], shake[1] + p[1]],
+        }
+    }
 }
 
 /// One `PlayScenarioEffect` instance: the prefab `name` from `bundle`, instantiated
@@ -92,12 +136,43 @@ pub struct FxState {
     pub seed: u32,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackgroundState {
     pub current: Option<String>,
     /// Crossfade source and the weight of `current` in [0, 1].
     pub previous: Option<String>,
     pub mix: f32,
+    /// `backgroundImage.material` = `Materials/UI/UIGaussianBlur` (effect 44 "true").
+    #[serde(default)]
+    pub blur: bool,
+    /// Effect 45: `backgroundImage.parent` scale (about the screen centre), 1 = none.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub scale: f32,
+    /// Effect 45: `backgroundImage.material` = `Materials/UI/UIDollyZoomEffect` with
+    /// `[_SamplingDistance, _DistortionStrength]` (it replaces the blur material).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dolly: Option<[f32; 2]>,
+}
+
+impl Default for BackgroundState {
+    fn default() -> Self {
+        Self {
+            current: None,
+            previous: None,
+            mix: 0.0,
+            blur: false,
+            scale: 1.0,
+            dolly: None,
+        }
+    }
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+fn is_one(v: &f32) -> bool {
+    *v == 1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +194,9 @@ pub struct CharacterState {
     /// "monitor").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hologram: Option<HologramState>,
+    /// `Live2DBlurController` on the `RawImage` (character shader "blur"): `_Blur`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur: Option<f32>,
 }
 
 /// The `Live2D/Materials/Live2DHologram` instance's animated values this frame.
@@ -191,6 +269,34 @@ pub struct BannerState {
     pub alpha: f32,
 }
 
+/// A DOTween (ease OutQuad) of a volume from `from` to `to` over `frames`, from `start`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct VolumeTween {
+    pub start: u32,
+    pub frames: u32,
+    pub from: f32,
+    pub to: f32,
+}
+
+impl VolumeTween {
+    fn value(&self, frame: f64) -> f32 {
+        if self.frames == 0 {
+            return self.to;
+        }
+        let t = ((frame - f64::from(self.start)) / f64::from(self.frames)).clamp(0.0, 1.0) as f32;
+        self.from + (self.to - self.from) * (t * (2.0 - t))
+    }
+
+    /// The volume at `frame` (fractional) given the tweens in start order; 1 before any.
+    pub fn at(tweens: &[VolumeTween], frame: f64) -> f32 {
+        tweens
+            .iter()
+            .rev()
+            .find(|t| f64::from(t.start) <= frame)
+            .map_or(1.0, |t| t.value(frame))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioCue {
     /// Library-relative waveform files (played together).
@@ -204,6 +310,49 @@ pub struct AudioCue {
     pub fade_in: u32,
     pub fade_out: u32,
     pub kind: AudioKind,
+    /// A BGM track's local AISAC volume graph (`BGM_VERTICAL` layers), driven by
+    /// `ParamTable::bgm_vertical`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aisac: Option<AisacCurve>,
+}
+
+/// Control → volume points (piecewise linear) and the control's default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AisacCurve {
+    pub points: Vec<[f32; 2]>,
+    pub default: f32,
+}
+
+impl AisacCurve {
+    pub fn volume(&self, control: f32) -> f32 {
+        let p = &self.points;
+        match p.len() {
+            0 => 1.0,
+            1 => p[0][1],
+            _ => {
+                if control <= p[0][0] {
+                    return p[0][1];
+                }
+                for w in p.windows(2) {
+                    if control <= w[1][0] {
+                        let t = (control - w[0][0]) / (w[1][0] - w[0][0]).max(1e-9);
+                        return w[0][1] + (w[1][1] - w[0][1]) * t;
+                    }
+                }
+                p[p.len() - 1][1]
+            }
+        }
+    }
+
+    /// The layer's volume at `frame` given the `BGM_VERTICAL` settings in order.
+    pub fn at(&self, sets: &[(u32, f32)], frame: f64) -> f32 {
+        let control = sets
+            .iter()
+            .rev()
+            .find(|(f, _)| f64::from(*f) <= frame)
+            .map_or(self.default, |s| s.1);
+        self.volume(control)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,4 +361,30 @@ pub enum AudioKind {
     Se,
     Voice,
     Movie,
+}
+
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+
+    #[test]
+    fn bgm_volume_tweens_ease_out_quad_from_the_current_value() {
+        let t = [
+            VolumeTween {
+                start: 10,
+                frames: 20,
+                from: 1.0,
+                to: 0.0,
+            },
+            VolumeTween {
+                start: 20,
+                frames: 0,
+                from: 0.75,
+                to: 0.5,
+            },
+        ];
+        assert_eq!(VolumeTween::at(&t, 0.0), 1.0);
+        assert!((VolumeTween::at(&t, 15.0) - (1.0 - 0.4375)).abs() < 1e-6);
+        assert_eq!(VolumeTween::at(&t, 25.0), 0.5);
+    }
 }

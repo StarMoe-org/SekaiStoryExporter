@@ -1,6 +1,6 @@
-# IR 规约 v3
+# IR 规约 v4
 
-> **状态：v3（2026-09-25）。** 依据 [ADR-0008](../adr/0008-ir.md)。v2 → v3：`Layout` 增加 `motion` / `facial`，任何布局类型都会先换动作与表情（`SnippetActionCharacterLayout` 在类型分支之前执行）；出场仍由 `Appear` 自带。
+> **状态：v4（2026-09-26）。** 依据 [ADR-0008](../adr/0008-ir.md)。v3 → v4：`Layout` 增加 `costume`（非出场类型的换装：`CheckAndChangeCostume` 隐藏角色并换模型）；`LayoutOp::Shake` 增加 `duration`；新增 `EffectOp::DollyZoom`（日服特效 45）。v2 → v3：`Layout` 增加 `motion` / `facial`，任何布局类型都会先换动作与表情（`SnippetActionCharacterLayout` 在类型分支之前执行）；出场仍由 `Appear` 自带。
 
 IR（Intermediate Representation，中间表示）是 `sse-scenario`（解析）与 `sse-timeline`（调度模拟）之间的接缝：
 
@@ -145,6 +145,7 @@ pub struct Talk {
 | 背景 | 7 | `ChangeBackground{background: BackgroundRef, duration}` |
 | 文字 | 8, 18, 24 | `Telop{text}` / `PlaceInfo{text}` / `FullScreenText{text, voice?}` |
 | 相机后处理 | 9, 10, 27, 28, 38, 39, 44 | `CameraColor{effect: Flashback\|Sepia}` / `CameraColorOff` / `Blur{dir, duration}` / `BackgroundBlur(bool)` |
+| Dolly zoom | 45（日服） | `DollyZoom{zoom?, blur?, dist?, ease}`（`DollyZoomParams` 解析；无 Zoom 时游戏跳过） |
 | 相机变换 | 42, 43 | `CameraMove{x, y, duration}` / `CameraZoom{scale, duration}`；**解析失败照游戏**（42 段数≠2 → `LogError` 后的行为；43 `TryParse` 失败值） |
 | 环境色 | 12–14 | `Ambient(Afternoon\|Evening\|Night)` |
 | 场景特效 | 15, 16 | `PlayScenarioEffect{name, bundle}` / `StopScenarioEffect{name}` |
@@ -152,7 +153,7 @@ pub struct Talk {
 | 转场 | 20, 21, 40, 41, 29–36 | `SekaiTransition{variant, dir}` / `SideFade{fade_type, duration}` |
 | 选项展示 | 23 | `SimpleSelectable{options: Vec<String>}`（按 `/` 切分）；**不是分支**（ADR-0008） |
 | 空实现 | 0, 11, 17 | `Noop`（游戏里只 `FinishSnippet`） |
-| 不支持 | 19 Movie, 37 MusicVideo, ≥45 | `Unsupported{…}`（§4） |
+| 不支持 | 19 Movie, 37 MusicVideo（3D MV，ADR-0011 范围外）, ≥46 | `Unsupported{…}`（§4） |
 
 `bool` / `f32` 字符串的解析函数**必须复刻 .NET `Boolean.TryParse` / `Single.TryParse` 的行为**（含失败时取 `false` / `0`），
 不得用 Rust 默认解析器替代——实装里有 132 条 `StopShakeWindow` 的 `StringVal` 为空串，依赖的正是失败语义。

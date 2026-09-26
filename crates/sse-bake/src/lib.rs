@@ -8,7 +8,9 @@
 //! `Update`), then the animator (motion + facial), eye blink, lip sync, breath, physics
 //! (`LateUpdate`), then the snapshot.
 
+mod bgm;
 mod character;
+mod effect_audio;
 mod hologram;
 mod lipsync;
 mod shake;
@@ -17,7 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use sse_assets::Library;
-use sse_core::{TimeBase, consts, rng::Rng};
+use sse_core::{TimeBase, consts, ease::Ease, rng::Rng};
 use sse_ir::*;
 use sse_params::*;
 use sse_timeline::Timeline;
@@ -56,6 +58,53 @@ struct Tween {
     frames: u32,
     ease_out_quad: bool,
 }
+
+/// A DOTween with an explicit ease (`SetEase`).
+#[derive(Debug, Clone, Copy)]
+struct EaseTween {
+    from: f32,
+    to: f32,
+    start: u32,
+    frames: u32,
+    ease: Ease,
+}
+
+impl EaseTween {
+    fn fixed(v: f32) -> Self {
+        Self {
+            from: v,
+            to: v,
+            start: 0,
+            frames: 0,
+            ease: Ease::Linear,
+        }
+    }
+
+    fn at(&self, f: u32) -> f32 {
+        if self.frames == 0 || f >= self.start + self.frames {
+            return self.to;
+        }
+        if f <= self.start {
+            return self.from;
+        }
+        let t = (f - self.start) as f32 / self.frames as f32;
+        self.from + (self.to - self.from) * self.ease.at(t)
+    }
+
+    /// `Kill(complete: true)` on the running tween, then a new one from its end value.
+    fn restart(&mut self, to: f32, start: u32, frames: u32, ease: Ease) {
+        *self = Self {
+            from: self.to,
+            to,
+            start,
+            frames,
+            ease,
+        };
+    }
+}
+
+/// `UnityEngine.Mathf.Epsilon` (`float.Epsilon`, the smallest subnormal).
+const MATHF_EPSILON: f32 = 1e-45;
 
 /// How long a stopped effect stays in the frame state; the renderer drops it as soon as
 /// `WaitAllStop` would destroy it (no live particle, Stop clip over).
@@ -260,9 +309,28 @@ struct Baker<'a> {
     effects: Vec<(String, String, u32, Option<u32>)>,
     /// Character shader effects (case 22) and prefabs attached to model views, by character.
     shaders: BTreeMap<CharacterId, hologram::Controller>,
+    /// `Live2DBlurController._intensity` by character (character shader "blur").
+    blurs: BTreeMap<CharacterId, f32>,
     attached: BTreeMap<CharacterId, Vec<hologram::Attached>>,
     audio: Vec<AudioCue>,
-    bgm: Option<usize>,
+    /// `bgmVolumeTweener` (see `ParamTable::bgm_volume`).
+    bgm_volume: Vec<VolumeTween>,
+    /// `ScenarioStudioCamera.cameraMoveTweener` (x, y) and `cameraZoomTweener`.
+    camera_move: [Tween; 2],
+    camera_zoom: Tween,
+    /// Effect 45: `dollyZoomTweener` (background parent scale), `dollyZoomBlurTweener`,
+    /// `dollyZoomDistortionTweener`, and whether the dolly material is on the background.
+    dolly_scale: EaseTween,
+    dolly_blur: EaseTween,
+    dolly_distortion: EaseTween,
+    dolly_material: bool,
+    /// Effect 23: (options, open frame, answer frame).
+    choice: Option<(Vec<String>, u32, u32)>,
+    /// Playing BGM cues (one per track of a layered cue) and an interactive BGM's sequencer.
+    bgm: Vec<usize>,
+    bgm_seq: Option<bgm::Sequencer>,
+    /// `BGM_VERTICAL` control values (see `ParamTable::bgm_vertical`).
+    bgm_vertical: Vec<(u32, f32)>,
     se_loops: BTreeMap<String, usize>,
     notes: Vec<String>,
 }
@@ -292,6 +360,7 @@ impl<'a> Baker<'a> {
                 current: ep.initial.background.as_ref().map(|b| b.0.clone()),
                 previous: None,
                 mix: 1.0,
+                ..BackgroundState::default()
             },
             bg_tween: None,
             fader: [0.0; 4],
@@ -315,9 +384,20 @@ impl<'a> Baker<'a> {
             side_fade: None,
             effects: Vec::new(),
             shaders: BTreeMap::new(),
+            blurs: BTreeMap::new(),
             attached: BTreeMap::new(),
             audio: Vec::new(),
-            bgm: None,
+            bgm_volume: Vec::new(),
+            camera_move: [Tween::fixed(0.0), Tween::fixed(0.0)],
+            camera_zoom: Tween::fixed(1.0),
+            dolly_scale: EaseTween::fixed(1.0),
+            dolly_blur: EaseTween::fixed(0.0),
+            dolly_distortion: EaseTween::fixed(0.0),
+            dolly_material: false,
+            choice: None,
+            bgm: Vec::new(),
+            bgm_seq: None,
+            bgm_vertical: Vec::new(),
             se_loops: BTreeMap::new(),
             notes: tl.notes.clone(),
         }
@@ -370,11 +450,21 @@ impl<'a> Baker<'a> {
             for c in self.chars.values_mut() {
                 c.late_update(f, dt, self.tb);
             }
+            if let Some(seq) = self.bgm_seq.as_mut() {
+                seq.advance(self.tb.seconds(sse_core::SimFrame(f)), &mut self.audio);
+            }
             frames.push(self.snapshot(f));
         }
+        self.effect_sounds();
         // CleanupSounds(): fade everything out.
         let end = self.tl.end_frame;
         let fade = self.tb.frames_for(consts::CLEANUP_SOUND_FADE_TIME);
+        if let Some(mut seq) = self.bgm_seq.take() {
+            seq.stop(end, 0, &mut self.audio);
+            for &i in &seq.cues {
+                self.audio[i].fade_out = fade.min(end.saturating_sub(self.audio[i].start_frame));
+            }
+        }
         for cue in &mut self.audio {
             if cue.stop_frame.is_none_or(|s| s > end) && cue.looping {
                 cue.stop_frame = Some(end);
@@ -387,6 +477,8 @@ impl<'a> Baker<'a> {
             models: self.models,
             frames,
             audio: self.audio,
+            bgm_volume: self.bgm_volume,
+            bgm_vertical: self.bgm_vertical,
             notes: self.notes,
         })
     }
@@ -531,6 +623,56 @@ impl<'a> Baker<'a> {
         Ok(())
     }
 
+    /// `CheckAndChangeCostume` for a loaded character wearing another costume:
+    /// `FadeOpacity(0, 0, 0)` (one frame, then opacity 0) whose callback sets the display
+    /// status to Hide, and `ChangeCostume` swaps the model in the same view.
+    fn change_costume(&mut self, id: CharacterId, costume: &str, f: u32) -> Result<(), BakeError> {
+        let Some(old) = self.chars.get(&id) else {
+            return Ok(());
+        };
+        if old.costume == costume {
+            return Ok(());
+        }
+        let model_bundle = self
+            .ep
+            .cast
+            .get(&id)
+            .and_then(|c| c.costumes.get(costume))
+            .and_then(|c| c.model.clone());
+        let Some(model_bundle) = model_bundle else {
+            note(
+                &mut self.notes,
+                &format!("character {id}: costume {costume} has no model bundle"),
+            );
+            return Ok(());
+        };
+        let (model_index, info) = self.model_info(&model_bundle.0)?;
+        let old = self.chars.remove(&id).expect("checked");
+        let breath_deg = self.rng.range_i32(0, 360) as f32;
+        let mut rt = CharacterRt::new(
+            id,
+            costume.to_owned(),
+            model_index,
+            info,
+            breath_deg,
+            old.x.at(f),
+            old.y,
+            old.scale,
+        );
+        // one frame of the old model at its opacity, then nothing
+        rt.visible = old.visible;
+        rt.hide_at = Some(f + 1);
+        rt.opacity = Tween {
+            from: old.opacity.at(f),
+            to: 0.0,
+            start: f + 1,
+            frames: 0,
+            ease_out_quad: false,
+        };
+        self.chars.insert(id, rt);
+        Ok(())
+    }
+
     fn change_motion(
         &mut self,
         id: CharacterId,
@@ -607,26 +749,76 @@ impl<'a> Baker<'a> {
         }
     }
 
-    fn play_bgm(&mut self, a: &AudioRef, frame: u32, fade: f32, volume: f32) {
-        let fade_frames = self.tb.frames_for(fade);
-        if let Some(prev) = self.bgm {
-            let cue = &mut self.audio[prev];
+    /// Stops the playing BGM (every layer, and an interactive BGM's sequencer).
+    fn stop_bgm(&mut self, frame: u32, fade: u32) {
+        for i in std::mem::take(&mut self.bgm) {
+            let cue = &mut self.audio[i];
             if cue.stop_frame.is_none() {
-                cue.stop_frame = Some(frame + fade_frames);
-                cue.fade_out = fade_frames;
+                cue.stop_frame = Some(frame + fade);
+                cue.fade_out = fade;
             }
         }
-        self.audio.push(AudioCue {
-            files: a.files.iter().map(|f| f.0.clone()).collect(),
-            start_frame: frame,
-            stop_frame: None,
-            looping: true,
-            volume,
-            fade_in: fade_frames,
-            fade_out: 0,
-            kind: AudioKind::Bgm,
-        });
-        self.bgm = Some(self.audio.len() - 1);
+        if let Some(mut seq) = self.bgm_seq.take() {
+            seq.advance(self.tb.seconds(sse_core::SimFrame(frame)), &mut self.audio);
+            seq.stop(frame, fade, &mut self.audio);
+        }
+    }
+
+    fn play_bgm(&mut self, a: &AudioRef, frame: u32, fade: f32, volume: f32) {
+        let fade_frames = self.tb.frames_for(fade);
+        self.stop_bgm(frame, fade_frames);
+        let files: Vec<String> = a.files.iter().map(|f| f.0.clone()).collect();
+        let structure = self.lib.cue_structure(&files, &a.cue).map(Arc::new);
+        match structure {
+            // interactive BGM: blocks from the first one (`SetFirstBGMBlockIndex(0)`)
+            Some(s) if !s.blocks.is_empty() => {
+                let t = self.tb.seconds(sse_core::SimFrame(frame));
+                let fps = f64::from(self.tb.fps());
+                self.bgm_seq = Some(bgm::Sequencer::start(
+                    s,
+                    t,
+                    volume,
+                    fade_frames,
+                    fps,
+                    &mut self.audio,
+                ));
+            }
+            // a sequence whose tracks carry their own AISAC: one cue per track
+            Some(s) if s.layers.iter().any(Option::is_some) => {
+                for (wave, aisac) in s.waves.iter().zip(&s.layers) {
+                    let Some(wave) = wave else { continue };
+                    self.audio.push(AudioCue {
+                        files: vec![wave.clone()],
+                        start_frame: frame,
+                        stop_frame: None,
+                        looping: true,
+                        volume,
+                        fade_in: fade_frames,
+                        fade_out: 0,
+                        kind: AudioKind::Bgm,
+                        aisac: aisac.clone().map(|a| AisacCurve {
+                            points: a.points,
+                            default: a.default,
+                        }),
+                    });
+                    self.bgm.push(self.audio.len() - 1);
+                }
+            }
+            _ => {
+                self.audio.push(AudioCue {
+                    files,
+                    start_frame: frame,
+                    stop_frame: None,
+                    looping: true,
+                    volume,
+                    fade_in: fade_frames,
+                    fade_out: 0,
+                    kind: AudioKind::Bgm,
+                    aisac: None,
+                });
+                self.bgm.push(self.audio.len() - 1);
+            }
+        }
     }
 
     fn one_shot(&mut self, a: &AudioRef, frame: u32, volume: f32, kind: AudioKind) {
@@ -639,6 +831,7 @@ impl<'a> Baker<'a> {
             fade_in: 0,
             fade_out: 0,
             kind,
+            aisac: None,
         });
     }
 
@@ -698,6 +891,7 @@ impl<'a> Baker<'a> {
                             fade_in: self.tb.frames_for(*fade),
                             fade_out: 0,
                             kind: AudioKind::Se,
+                            aisac: None,
                         });
                         self.se_loops.insert(name.clone(), self.audio.len() - 1);
                     }
@@ -707,20 +901,29 @@ impl<'a> Baker<'a> {
                     if let Some(i) = self.se_loops.remove(se) {
                         self.audio[i].stop_frame = Some(f + frames);
                         self.audio[i].fade_out = frames;
-                    } else if !bgm.is_empty()
-                        && let Some(i) = self.bgm.take()
-                    {
-                        self.audio[i].stop_frame = Some(f + frames);
-                        self.audio[i].fade_out = frames;
+                    } else if !bgm.is_empty() {
+                        self.stop_bgm(f, frames);
                     }
                 }
-                SoundOp::BgmVolume { .. }
-                | SoundOp::BgmAisacVolume { .. }
-                | SoundOp::BgmBlock { .. } => {
-                    note(
-                        &mut self.notes,
-                        "BGM volume / AISAC / block changes are not applied yet",
-                    );
+                // `SafeKill(bgmVolumeTweener)`, then `DOTween.To(AisacVolumeBGM, volume,
+                // duration)` from the current value
+                SoundOp::BgmVolume { volume, duration } => {
+                    let from = VolumeTween::at(&self.bgm_volume, f64::from(f));
+                    self.bgm_volume.push(VolumeTween {
+                        start: f,
+                        frames: self.tb.frames_for(duration.max(0.0)),
+                        from,
+                        to: *volume,
+                    });
+                }
+                // `SetValueToBGMAISAC(Bgm, "BGM_VERTICAL", Volume)` on the BGM player
+                SoundOp::BgmAisacVolume { value } => self.bgm_vertical.push((f, *value)),
+                // `SetBgmBlockIndex(BgmBlockIndex)` while a BGM plays (see `bgm`)
+                SoundOp::BgmBlock { index } => {
+                    let t = self.tb.seconds(sse_core::SimFrame(f));
+                    if let (Some(seq), Ok(i)) = (self.bgm_seq.as_mut(), usize::try_from(*index)) {
+                        seq.request(i, t, &mut self.audio);
+                    }
                 }
                 SoundOp::Nothing => {}
             }
@@ -785,7 +988,8 @@ impl<'a> Baker<'a> {
                     c.hide_at = Some(start + frames);
                 }
             }
-            LayoutOp::Shake { .. } => note(&mut self.notes, "character shake not rendered"),
+            // the shake moves an empty child of the model view: nothing visible
+            LayoutOp::Shake { .. } => {}
             LayoutOp::Depth { depth } => self.depth(l.character, *depth),
         }
         Ok(())
@@ -858,6 +1062,9 @@ impl<'a> Baker<'a> {
                 }
             }
             InstrKind::Layout(l) => {
+                if let Some(costume) = &l.costume {
+                    self.change_costume(l.character, costume, f)?;
+                }
                 if l.motion.is_some() || l.facial.is_some() {
                     self.change_motion(
                         l.character,
@@ -1036,6 +1243,50 @@ impl<'a> Baker<'a> {
                     timing: t,
                 });
             }
+            // `ScenarioStudioCamera.CameraMove`: `Kill(complete)` the running move, then
+            // `DOLocalMove((x, y, z))` over `Duration` (default ease OutQuad)
+            EffectOp::CameraMove { x, y, valid } => {
+                if *valid {
+                    let frames = self.tb.frames_for(d);
+                    for (t, to) in self.camera_move.iter_mut().zip([*x, *y]) {
+                        *t = Tween {
+                            from: t.to,
+                            to,
+                            start: f,
+                            frames,
+                            ease_out_quad: true,
+                        };
+                    }
+                }
+            }
+            // `cameraZoomTweener.Kill(complete)`, `scenarioRoot.DOScale(scale, Duration)`
+            EffectOp::CameraZoom { scale } => {
+                self.camera_zoom = Tween {
+                    from: self.camera_zoom.to,
+                    to: *scale,
+                    start: f,
+                    frames: self.tb.frames_for(d),
+                    ease_out_quad: true,
+                };
+            }
+            // `backgroundImage.material = on ? Resources "Materials/UI/UIGaussianBlur" : null`
+            EffectOp::BackgroundBlur { on } => self.background.blur = *on,
+            EffectOp::SimpleSelectable { options } => {
+                if options.len() > 1 {
+                    let answer = f + self.tb.frames_for(consts::EXPORT_CHOICE_WAIT);
+                    self.choice = Some((options.clone(), f, answer));
+                    note(
+                        &mut self.notes,
+                        "choices (effect 23): the first answer is picked 1.5 s after the dialog opens (player input); SE_UI_CHOICES_DECIDE is not played",
+                    );
+                }
+            }
+            EffectOp::DollyZoom {
+                zoom,
+                blur,
+                dist,
+                ease,
+            } => self.dolly_zoom(*zoom, *blur, *dist, ease, f, d),
             EffectOp::Blur { dir } => {
                 let (from, to) = match dir {
                     Direction::In => (self.blur_value, 1.0),
@@ -1197,7 +1448,148 @@ impl<'a> Baker<'a> {
             EffectOp::StopShakeScreen => self.screen_shake = None,
             EffectOp::StopShakeWindow => self.window_shake = None,
             EffectOp::Noop => {}
-            other => note(&mut self.notes, &format!("effect not rendered: {other:?}")),
+        }
+    }
+
+    /// Scenario effect prefab sounds (see `effect_audio`), for every `PlayScenarioEffect`
+    /// instance; the environment SE player is shared by all of them.
+    fn effect_sounds(&mut self) {
+        use effect_audio::{EffectSounds, SoundEvent};
+        let fps = f64::from(self.tb.fps());
+        let end = self.tl.end_frame;
+        let mut loaded: BTreeMap<String, Option<std::sync::Arc<EffectSounds>>> = BTreeMap::new();
+        // (absolute seconds, instance, event)
+        let mut timeline: Vec<(f64, usize, SoundEvent)> = Vec::new();
+        let mut sounds = Vec::new();
+        for (i, (bundle, _name, start, stop)) in self.effects.iter().enumerate() {
+            let s = loaded
+                .entry(bundle.clone())
+                .or_insert_with(|| EffectSounds::load(self.lib, bundle).map(std::sync::Arc::new))
+                .clone();
+            let Some(s) = s else { continue };
+            let t0 = f64::from(*start) / fps;
+            let stop_s = stop.map(|st| (f64::from(st) - f64::from(*start)) as f32 / fps as f32);
+            let horizon = (f64::from(end.saturating_sub(*start)) / fps) as f32;
+            for (t, ev) in s.events(stop_s, horizon) {
+                timeline.push((t0 + f64::from(t), i, ev));
+            }
+            sounds.push((i, s));
+        }
+        if timeline.is_empty() {
+            return;
+        }
+        timeline.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let cues_of = |i: usize| sounds.iter().find(|(k, _)| *k == i).map(|(_, s)| s.clone());
+        // per instance: (loop SE fade time, volume); the shared environment player
+        let mut params: BTreeMap<usize, (f32, f32)> = BTreeMap::new();
+        let mut env: Option<usize> = None;
+        for (t, i, ev) in timeline {
+            let frame = (t * fps).round() as u32;
+            if frame >= end {
+                break;
+            }
+            let (fade, volume) = *params.entry(i).or_insert((0.25, 1.0));
+            let Some(s) = cues_of(i) else { continue };
+            match ev {
+                SoundEvent::FadeTime(v) => params.entry(i).or_insert((0.25, 1.0)).0 = v,
+                SoundEvent::Volume(v) => params.entry(i).or_insert((0.25, 1.0)).1 = v,
+                SoundEvent::PlayEnv(cue) => {
+                    let Some(files) = s.cues.get(&cue) else {
+                        continue;
+                    };
+                    let frames = self.tb.frames_for(fade);
+                    if let Some(prev) = env.take()
+                        && self.audio[prev].stop_frame.is_none()
+                    {
+                        self.audio[prev].stop_frame = Some(frame + frames);
+                        self.audio[prev].fade_out = frames;
+                    }
+                    self.audio.push(AudioCue {
+                        files: files.clone(),
+                        start_frame: frame,
+                        stop_frame: None,
+                        looping: true,
+                        volume,
+                        fade_in: frames,
+                        fade_out: 0,
+                        kind: AudioKind::Se,
+                        aisac: None,
+                    });
+                    env = Some(self.audio.len() - 1);
+                }
+                SoundEvent::StopEnv => {
+                    let frames = self.tb.frames_for(fade);
+                    if let Some(prev) = env.take()
+                        && self.audio[prev].stop_frame.is_none()
+                    {
+                        self.audio[prev].stop_frame = Some(frame + frames);
+                        self.audio[prev].fade_out = frames;
+                    }
+                }
+                SoundEvent::PlaySe(cue) => {
+                    let Some(files) = s.cues.get(&cue) else {
+                        continue;
+                    };
+                    self.audio.push(AudioCue {
+                        files: files.clone(),
+                        start_frame: frame,
+                        stop_frame: None,
+                        looping: false,
+                        volume: 1.0,
+                        fade_in: 0,
+                        fade_out: 0,
+                        kind: AudioKind::Se,
+                        aisac: None,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Effect 45 (JP `SnippetActionSpecialEffect` case 45).
+    fn dolly_zoom(
+        &mut self,
+        zoom: Option<f32>,
+        blur: Option<f32>,
+        dist: Option<f32>,
+        ease: &str,
+        f: u32,
+        d: f32,
+    ) {
+        // "Zoom is required": the game logs an error and ends the snippet
+        let Some(zoom) = zoom else { return };
+        // `Enum.TryParse<Ease>(StringValSub, true)`, else `Ease.Linear`
+        let ease = if ease.trim().is_empty() {
+            Ease::Linear
+        } else {
+            Ease::parse(ease).unwrap_or_else(|| {
+                note(
+                    &mut self.notes,
+                    &format!("dolly zoom ease {ease:?} approximated as Linear"),
+                );
+                Ease::Linear
+            })
+        };
+        let frames = self.tb.frames_for(d);
+        // `backgroundImage.transform.parent.DOScale(zoom, Duration).SetEase(ease)`
+        self.dolly_scale.restart(zoom, f, frames, ease);
+        // `CalcDistortionStrength`, `ShouldClearBlur`
+        let distortion = match dist {
+            Some(dist) => dist * -(zoom - 1.0),
+            None => 0.0,
+        };
+        let has_blur = blur.is_some_and(|b| b > MATHF_EPSILON);
+        let no_distortion = dist.is_none() || distortion.abs() <= MATHF_EPSILON;
+        if !has_blur && no_distortion {
+            // kill both, zero the floats, give the background back its previous material
+            self.dolly_blur = EaseTween::fixed(0.0);
+            self.dolly_distortion = EaseTween::fixed(0.0);
+            self.dolly_material = false;
+        } else {
+            self.dolly_material = true;
+            self.dolly_blur
+                .restart(blur.unwrap_or(0.0), f, frames, ease);
+            self.dolly_distortion.restart(distortion, f, frames, ease);
         }
     }
 
@@ -1209,21 +1601,29 @@ impl<'a> Baker<'a> {
             "none" => {
                 // `DetachModelEffect` (every character), `DetachScenarioEffectToCharacter`
                 self.shaders.clear();
+                self.blurs.clear();
                 self.attached.remove(&id);
                 return;
             }
-            other => {
-                note(
-                    &mut self.notes,
-                    &format!("character shader {other:?} not rendered"),
-                );
+            // `AttachModelEffect(7, id, float.TryParse(StringValSub) ?? 1)`: a
+            // `Live2DBlurController` (`SetBlurIntensity` clamps to [1, 3]) replacing the current
+            // model effect, unless the current one is already a blur
+            "blur" => {
+                if !self.blurs.contains_key(&id) {
+                    let v = bundle.trim().parse::<f32>().unwrap_or(1.0);
+                    self.shaders.remove(&id);
+                    self.blurs.insert(id, v.clamp(1.0, 3.0));
+                }
                 return;
             }
+            // matches none of the game's branches: the snippet just finishes
+            _ => return,
         };
         if self.shaders.get(&id).is_some_and(|c| c.kind == kind) {
             return;
         }
         let seed = self.opts.seed ^ (u64::from(f) << 20) ^ id as u64;
+        self.blurs.remove(&id);
         self.shaders
             .insert(id, hologram::Controller::new(kind, f, seed));
         if kind == hologram::Kind::Hologram {
@@ -1298,6 +1698,7 @@ impl<'a> Baker<'a> {
                 color: self.ambient,
                 params: c.values.clone(),
                 hologram,
+                blur: self.blurs.get(id).copied(),
             });
         }
         let talk = self.talk.as_ref().map(|(index, t)| {
@@ -1324,7 +1725,13 @@ impl<'a> Baker<'a> {
             _ => None,
         };
         FrameState {
-            background: self.background.clone(),
+            background: BackgroundState {
+                scale: self.dolly_scale.at(f),
+                dolly: self
+                    .dolly_material
+                    .then(|| [self.dolly_blur.at(f), self.dolly_distortion.at(f)]),
+                ..self.background.clone()
+            },
             characters,
             fader: self.fader,
             blur: self.blur_value,
@@ -1353,6 +1760,28 @@ impl<'a> Baker<'a> {
             scenario_shake: self.screen_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
             window_shake: self.window_shake.as_ref().map_or([0.0, 0.0], |s| s.at(f)),
             side_fade: self.side_fade.as_ref().and_then(|s| s.at(f)),
+            choice: self.choice.as_ref().and_then(|(options, open, answer)| {
+                let n = self.tb.frames_for(consts::DIALOG_SCALE_DURATION).max(1) as f32;
+                let scale = if f < *open {
+                    return None;
+                } else if f < *answer {
+                    ((f - open) as f32 / n).min(1.0)
+                } else {
+                    1.0 - (f - answer) as f32 / n
+                };
+                (scale > 0.0).then(|| ChoiceState {
+                    options: options.clone(),
+                    scale,
+                })
+            }),
+            camera: {
+                let v = CameraView {
+                    x: self.camera_move[0].at(f),
+                    y: self.camera_move[1].at(f),
+                    zoom: self.camera_zoom.at(f),
+                };
+                (v.x != 0.0 || v.y != 0.0 || v.zoom != 1.0).then_some(v)
+            },
             effects: self
                 .effects
                 .iter()

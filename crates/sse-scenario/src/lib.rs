@@ -458,6 +458,11 @@ impl Parser<'_> {
             },
             4 | 5 => LayoutOp::Shake {
                 axis: if l.kind == 4 { Axis::X } else { Axis::Y },
+                duration: match l.move_speed_type {
+                    0 => 0.5,
+                    1 => 0.75,
+                    _ => 0.25,
+                },
                 raw: serde_json::to_value(l).unwrap_or_default(),
             },
             6 => LayoutOp::Depth { depth },
@@ -474,23 +479,21 @@ impl Parser<'_> {
                 });
             }
         };
-        let (motion, facial) = if matches!(op, LayoutOp::Appear { .. }) {
-            (None, None)
+        let (motion, facial, costume) = if matches!(op, LayoutOp::Appear { .. }) {
+            (None, None, None)
         } else {
-            if !l.costume_type.is_empty() {
-                self.diags.push(Diagnostic::IgnoredField {
-                    index: pos,
-                    field: "LayoutData.CostumeType (not Appear)".into(),
-                    value: l.costume_type.clone(),
-                });
-            }
-            (opt(&l.motion_name), opt(&l.facial_name))
+            (
+                opt(&l.motion_name),
+                opt(&l.facial_name),
+                opt(&l.costume_type),
+            )
         };
         InstrKind::Layout(Layout {
             character,
             op,
             motion,
             facial,
+            costume,
         })
     }
 
@@ -640,6 +643,30 @@ impl Parser<'_> {
             43 => CameraZoom {
                 scale: single_try_parse(&e.string_val),
             },
+            45 => {
+                // `DollyZoomParams(string)`: '：' → ':', split ',', then "key:value" pairs,
+                // keys compared ignoring case, values via `float.TryParse`
+                let (mut zoom, mut blur, mut dist) = (None, None, None);
+                for part in e.string_val.replace('：', ":").split(',') {
+                    let kv: Vec<&str> = part.split(':').collect();
+                    if kv.len() != 2 {
+                        continue;
+                    }
+                    let v = kv[1].trim().parse::<f32>().ok();
+                    match kv[0].trim().to_ascii_lowercase().as_str() {
+                        "zoom" => zoom = v,
+                        "blur" => blur = v,
+                        "dist" => dist = v,
+                        _ => {}
+                    }
+                }
+                DollyZoom {
+                    zoom,
+                    blur,
+                    dist,
+                    ease: e.string_val_sub.clone(),
+                }
+            }
             44 => BackgroundBlur {
                 on: bool_try_parse(&e.string_val),
             },

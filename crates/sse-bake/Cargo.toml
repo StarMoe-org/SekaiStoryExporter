@@ -13,6 +13,8 @@ sse-timeline = { path = "../sse-timeline" }
 sse-live2d = { path = "../sse-live2d" }
 sse-params = { path = "../sse-params" }
 thiserror = "2"
+serde_json = "1"
+crc32fast = "1"
 
 [lints]
 workspace = true
