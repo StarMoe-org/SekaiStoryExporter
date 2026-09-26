@@ -21,7 +21,7 @@ use std::path::Path;
 use serde_json::Value;
 use sse_assets::SseMotion;
 use sse_assets::motion::CurveData;
-use sse_core::det_math::{cosf, sinf};
+use sse_core::det_math::{atan2f, cosf, sinf, sqrtf};
 
 use crate::particle::{SystemDef, SystemState};
 
@@ -150,10 +150,18 @@ enum Prop {
     /// `Transform` localScale / localPosition component (the SSR converter names them)
     Scale(usize),
     Position(usize),
-    /// `localEulerAnglesRaw.z` (degrees; the effects only turn about z)
-    EulerZ,
+    /// `localEulerAnglesRaw` component (degrees)
+    Euler(usize),
     /// `SpriteRenderer.m_Color` component
     SpriteColor(usize),
+    /// `SpriteRenderer` `material._Color` component
+    SpriteMatColor(usize),
+    /// `ParticleSystem.looping`
+    Looping,
+    /// `EmissionModule.m_Bursts.Array.data[i].countCurve.scalar`
+    BurstCount(usize),
+    /// `InitialModule.startColor.{minColor (true), maxColor}` component
+    StartColor(bool, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -622,11 +630,52 @@ fn load_animator(
             224 if attr == h("m_AnchoredPosition.x") => Some(Prop::AnchoredX),
             224 if attr == h("m_AnchoredPosition.y") => Some(Prop::AnchoredY),
             224 if attr == h("m_LocalPosition.z") => Some(Prop::Position(2)),
-            4 | 224 if attr == h("localEulerAnglesRaw.z") => Some(Prop::EulerZ),
+            4 | 224
+                if let Some(k) = [
+                    "localEulerAnglesRaw.x",
+                    "localEulerAnglesRaw.y",
+                    "localEulerAnglesRaw.z",
+                ]
+                .iter()
+                .position(|n| attr == h(n)) =>
+            {
+                Some(Prop::Euler(k))
+            }
             212 => ["m_Color.r", "m_Color.g", "m_Color.b", "m_Color.a"]
                 .iter()
                 .position(|n| attr == h(n))
-                .map(Prop::SpriteColor),
+                .map(Prop::SpriteColor)
+                .or_else(|| {
+                    // material property bindings: CRC32(name) & 0x0FFFFFFF, component in bits
+                    // 28–29, bit 30 set for colours
+                    (0..4)
+                        .find(|&k| {
+                            attr == (h("_Color") & 0x0FFF_FFFF) | ((k as u32) << 28) | 1 << 30
+                        })
+                        .map(Prop::SpriteMatColor)
+                }),
+            198 if attr == h("looping") => Some(Prop::Looping),
+            198 => (0..8)
+                .find(|i| {
+                    attr == h(&format!(
+                        "EmissionModule.m_Bursts.Array.data[{i}].countCurve.scalar"
+                    ))
+                })
+                .map(Prop::BurstCount)
+                .or_else(|| {
+                    [("minColor", true), ("maxColor", false)]
+                        .iter()
+                        .find_map(|&(m, min)| {
+                            (0..4)
+                                .find(|&c| {
+                                    attr == h(&format!(
+                                        "InitialModule.startColor.{m}.{}",
+                                        ["r", "g", "b", "a"][c]
+                                    ))
+                                })
+                                .map(|c| Prop::StartColor(min, c))
+                        })
+                }),
             4 => ["m_LocalScale.x", "m_LocalScale.y", "m_LocalScale.z"]
                 .iter()
                 .position(|n| attr == h(n))
@@ -789,9 +838,13 @@ pub struct EffectInstance {
     anchored: Vec<[f32; 2]>,
     scale: Vec<[f32; 3]>,
     pos: Vec<[f32; 3]>,
-    /// Animated z rotation (degrees) replacing the node's own.
-    euler_z: Vec<Option<f32>>,
+    /// Animated `localEulerAnglesRaw` components (degrees) replacing the node's own.
+    euler: Vec<[Option<f32>; 3]>,
     sprite_color: Vec<[f32; 4]>,
+    /// `material._Color` of the node's `SpriteRenderer` (Sprites/Default multiplies it in).
+    sprite_mat_color: Vec<[f32; 4]>,
+    /// Systems whose properties the Animator changed: their own copy of the definition.
+    defs: Vec<Option<SystemDef>>,
     anim: Option<AnimPlay>,
     time: f32,
     stopped_at: Option<f32>,
@@ -827,7 +880,9 @@ impl EffectInstance {
                 .collect(),
             scale: prefab.nodes.iter().map(|n| n.scale).collect(),
             pos: prefab.nodes.iter().map(|n| n.pos).collect(),
-            euler_z: vec![None; prefab.nodes.len()],
+            euler: vec![[None; 3]; prefab.nodes.len()],
+            sprite_mat_color: vec![[1.0; 4]; prefab.nodes.len()],
+            defs: vec![None; prefab.systems.len()],
             sprite_color: prefab
                 .nodes
                 .iter()
@@ -863,7 +918,9 @@ impl EffectInstance {
                 && inst.effective_active(i)
                 && inst.prefab.systems[s].play_on_awake
             {
-                let def = inst.prefab.systems[s].clone();
+                let def = inst.defs[s]
+                    .clone()
+                    .unwrap_or_else(|| inst.prefab.systems[s].clone());
                 inst.systems[s].play(&def, dt);
             }
         }
@@ -968,7 +1025,9 @@ impl EffectInstance {
                 };
                 if play {
                     if self.effective_active(i) {
-                        let def = self.prefab.systems[s].clone();
+                        let def = self.defs[s]
+                            .clone()
+                            .unwrap_or_else(|| self.prefab.systems[s].clone());
                         self.systems[s].play(&def, dt);
                     }
                 } else {
@@ -981,7 +1040,7 @@ impl EffectInstance {
                 continue;
             };
             let now = self.effective_active(i);
-            let def = &self.prefab.systems[s];
+            let def = self.defs[s].as_ref().unwrap_or(&self.prefab.systems[s]);
             if now && !before[i] {
                 if def.play_on_awake {
                     self.systems[s].play(def, dt);
@@ -1003,7 +1062,7 @@ impl EffectInstance {
             }
             let origins = self.systems[p].particle_origins();
             for &j in &self.prefab.subs[p] {
-                let def = &self.prefab.systems[j];
+                let def = self.defs[j].as_ref().unwrap_or(&self.prefab.systems[j]);
                 self.systems[j].sync_subs(def, &origins);
             }
         }
@@ -1011,8 +1070,8 @@ impl EffectInstance {
             let alive = self
                 .systems
                 .iter()
-                .zip(&self.prefab.systems)
-                .any(|(s, d)| s.is_alive(d));
+                .zip(self.defs.iter().zip(&self.prefab.systems))
+                .any(|(s, (o, d))| s.is_alive(o.as_ref().unwrap_or(d)));
             if !alive && self.time - at >= self.stop_wait && self.prefab.stop_destroys {
                 self.finished = true;
             }
@@ -1060,8 +1119,21 @@ impl EffectInstance {
                 Prop::AnchoredY => self.anchored[node][1] = v,
                 Prop::Scale(k) => self.scale[node][k] = v,
                 Prop::Position(k) => self.pos[node][k] = v,
-                Prop::EulerZ => self.euler_z[node] = Some(v),
+                Prop::Euler(k) => self.euler[node][k] = Some(v),
                 Prop::SpriteColor(c) => self.sprite_color[node][c] = v,
+                Prop::SpriteMatColor(c) => self.sprite_mat_color[node][c] = v,
+                Prop::Looping | Prop::BurstCount(_) | Prop::StartColor(..) => {
+                    let Some((s, _)) = self.prefab.nodes[node].system else {
+                        continue;
+                    };
+                    let def = self.defs[s].get_or_insert_with(|| self.prefab.systems[s].clone());
+                    match prop {
+                        Prop::Looping => def.set_looping(v > 0.5),
+                        Prop::BurstCount(b) => def.set_burst_count(b, v),
+                        Prop::StartColor(min, c) => def.set_start_color(min, c, v),
+                        _ => {}
+                    }
+                }
             }
         }
     }
@@ -1107,15 +1179,24 @@ impl EffectInstance {
                 }
                 Xf::Plain => ([self.pos[i][0], self.pos[i][1]], [0.0; 4]),
             };
-            // z rotation of the quaternion (the prefabs only turn about z)
-            let q = node.rot;
-            let ang = match self.euler_z[i] {
-                Some(deg) => deg.to_radians(),
-                None => 2.0 * q[2].atan2(q[3]),
+            // the rotation seen by the orthographic scenario camera: the x/y rows and columns
+            // of the 3D rotation
+            let r = match self.euler[i] {
+                [None, None, None] => quat_matrix(node.rot),
+                e => {
+                    let own = quat_euler(node.rot);
+                    euler_matrix([0, 1, 2].map(|k| e[k].unwrap_or(own[k])))
+                }
             };
-            let (s, c) = (sinf(ang), cosf(ang));
             let (sx, sy) = (self.scale[i][0], self.scale[i][1]);
-            let l = [c * sx, -s * sy, local_pos[0], s * sx, c * sy, local_pos[1]];
+            let l = [
+                r[0][0] * sx,
+                r[0][1] * sy,
+                local_pos[0],
+                r[1][0] * sx,
+                r[1][1] * sy,
+                local_pos[1],
+            ];
             world[i] = mul(pw, l);
             rects[i] = rect;
         }
@@ -1251,7 +1332,8 @@ impl EffectInstance {
                         order: *order,
                         corners,
                         uvs: rect_uvs(s.tex.uv),
-                        color: self.sprite_color[i],
+                        color: [0, 1, 2, 3]
+                            .map(|k| self.sprite_color[i][k] * self.sprite_mat_color[i][k]),
                         tex: Some(s.tex.png.clone()),
                         blend: Blend::Alpha,
                         mask,
@@ -1265,7 +1347,7 @@ impl EffectInstance {
                     self.prefab.systems[*si].sorting_order,
                 )
             {
-                let def = &self.prefab.systems[*si];
+                let def = self.defs[*si].as_ref().unwrap_or(&self.prefab.systems[*si]);
                 // `ScalingMode.Local`: position from the hierarchy, the system's own scale only;
                 // world-space particles carry their emission point, relative to the parent
                 let origin = if def.world_space {
@@ -1380,6 +1462,52 @@ impl EffectInstance {
     }
 }
 
+/// Rotation matrix of a unit quaternion (x, y, z, w).
+fn quat_matrix(q: [f32; 4]) -> [[f32; 3]; 3] {
+    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+        ],
+        [
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+        ],
+        [
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
+/// Unity's Euler angles (degrees): z, then x, then y, i.e. R = Ry · Rx · Rz.
+fn euler_matrix(e: [f32; 3]) -> [[f32; 3]; 3] {
+    let [x, y, z] = e.map(f32::to_radians);
+    let (sx, cx, sy, cy, sz, cz) = (sinf(x), cosf(x), sinf(y), cosf(y), sinf(z), cosf(z));
+    [
+        [cy * cz + sy * sx * sz, -cy * sz + sy * sx * cz, sy * cx],
+        [cx * sz, cx * cz, -sx],
+        [-sy * cz + cy * sx * sz, sy * sz + cy * sx * cz, cy * cx],
+    ]
+}
+
+/// The Euler angles (degrees) of a quaternion, as [`euler_matrix`] takes them.
+fn quat_euler(q: [f32; 4]) -> [f32; 3] {
+    let m = quat_matrix(q);
+    let sx = (-m[1][2]).clamp(-1.0, 1.0);
+    let x = atan2f(sx, sqrtf(1.0 - sx * sx));
+    let (y, z) = if sx.abs() < 0.999_999 {
+        (atan2f(m[0][2], m[2][2]), atan2f(m[1][0], m[1][1]))
+    } else {
+        (atan2f(-m[2][0], m[0][0]), 0.0)
+    };
+    [x, y, z].map(f32::to_degrees)
+}
+
 /// The transform an instance hangs off, in canvas pixels (origin at the canvas centre, y up).
 #[derive(Debug, Clone, Copy)]
 pub struct Parent {
@@ -1478,5 +1606,21 @@ mod tests {
         let child = [1.0, 0.0, 1.0, 0.0, 1.0, 1.0];
         let m = mul(parent, child);
         assert_eq!([m[2], m[5]], [12.0, 22.0]);
+    }
+
+    #[test]
+    fn euler_angles_round_trip_through_the_quaternion_matrix() {
+        // Quaternion.Euler(30, 20, 10) = AngleAxis(20, up) · AngleAxis(30, right) · AngleAxis(10, fwd)
+        let q = [0.268_536, 0.144_878, 0.038_135, 0.951_549];
+        let e = quat_euler(q);
+        for (a, b) in e.iter().zip([30.0, 20.0, 10.0]) {
+            assert!((a - b).abs() < 0.1, "{e:?}");
+        }
+        let (m, n) = (euler_matrix(e), quat_matrix(q));
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!((m[r][c] - n[r][c]).abs() < 1e-3);
+            }
+        }
     }
 }

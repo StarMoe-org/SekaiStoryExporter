@@ -99,6 +99,16 @@ pub enum Curve {
 }
 
 impl Curve {
+    /// Animating `….scalar`: the constant (or the upper constant) becomes `v`.
+    fn set_scalar(&mut self, v: f32) {
+        match self {
+            Curve::Const(c) => *c = v,
+            Curve::TwoConsts(_, hi) => *hi = v,
+            // curve modes keep their shape (their multiplier is folded in at parse time)
+            Curve::Keys(_) | Curve::TwoCurves(..) => {}
+        }
+    }
+
     pub fn parse(v: &Value) -> Self {
         let scalar = fv(v, "scalar");
         match v["minMaxState"].as_i64().unwrap_or(0) {
@@ -343,6 +353,28 @@ pub struct SystemDef {
 const CUSTOM1X_STREAM: i64 = 31;
 
 impl SystemDef {
+    /// Animated `looping`.
+    pub fn set_looping(&mut self, on: bool) {
+        self.looping = on;
+    }
+
+    /// Animated `EmissionModule.m_Bursts.Array.data[i].countCurve.scalar`.
+    pub fn set_burst_count(&mut self, i: usize, v: f32) {
+        if let Some(b) = self.bursts.get_mut(i) {
+            b.count.set_scalar(v);
+        }
+    }
+
+    /// Animated `InitialModule.startColor.{minColor,maxColor}` component `c`: the constant
+    /// colour is `maxColor`; `minColor` counts only in the two-colour mode.
+    pub fn set_start_color(&mut self, min: bool, c: usize, v: f32) {
+        match (&mut self.color, min) {
+            (ColorSpec::Color(k), false) | (ColorSpec::TwoColors(_, k), false) => k[c] = v,
+            (ColorSpec::TwoColors(k, _), true) => k[c] = v,
+            _ => {}
+        }
+    }
+
     pub fn shape_kind(&self) -> i64 {
         if self.shape.enabled {
             self.shape.kind
@@ -735,6 +767,9 @@ struct Particle {
 #[derive(Debug, Clone)]
 pub struct SystemState {
     particles: Vec<Particle>,
+    /// The loop the system was in when it last stepped as looping: turning `looping` off
+    /// lets that loop finish.
+    last_loop: Option<u32>,
     rng: u32,
     /// Time since `Play` (includes the start delay), `None` while not playing.
     time: Option<f32>,
@@ -812,6 +847,7 @@ fn norm(v: [f32; 3]) -> [f32; 3] {
 impl SystemState {
     pub fn new(def: &SystemDef, seed: u32) -> Self {
         SystemState {
+            last_loop: None,
             particles: Vec::new(),
             rng: (def.seed ^ seed.wrapping_mul(2654435761)) | 1,
             time: None,
@@ -890,7 +926,10 @@ impl SystemState {
             return true;
         }
         match self.time {
-            Some(t) => self.emitting && (def.looping || t < self.delay + def.duration),
+            Some(t) => {
+                let loops = self.last_loop.map_or(1, |l| l + 1) as f32;
+                self.emitting && (def.looping || t < self.delay + def.duration * loops)
+            }
             None => false,
         }
     }
@@ -953,12 +992,16 @@ impl SystemState {
         let dur = def.duration.max(1e-4);
         let local = t1 - self.delay;
         let (loop_i, in_loop) = if def.looping {
-            ((local / dur) as u32, local % dur)
-        } else if local > dur {
-            self.emitting = false;
-            return;
+            let l = (local / dur) as u32;
+            self.last_loop = Some(l);
+            (l, local % dur)
         } else {
-            (0, local)
+            let l = self.last_loop.unwrap_or(0);
+            if local > dur * (l + 1) as f32 {
+                self.emitting = false;
+                return;
+            }
+            (l, local - dur * l as f32)
         };
         // rate over time, sampled at the loop's normalized time
         let rate = def.rate.eval(unit(&mut self.rng), in_loop / dur);
