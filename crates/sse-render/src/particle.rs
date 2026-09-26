@@ -1156,7 +1156,11 @@ impl SystemState {
                     base[i] *= k[i];
                 }
             }
-            let size = if tr.size_affects_width { p.size[0] } else { 1.0 };
+            let size = if tr.size_affects_width {
+                p.size[0]
+            } else {
+                1.0
+            };
             let n = (pts.len() - 1) as f32;
             let width = |u: f32| tr.width.eval(p.rnd[2], u) * size;
             let color = |u: f32| {

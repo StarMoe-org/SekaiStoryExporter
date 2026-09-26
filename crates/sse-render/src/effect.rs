@@ -107,6 +107,19 @@ struct Node {
     system: Option<(usize, Option<Material>)>,
     /// `ParticleSystemRenderer.trailMaterialIndex` material (`m_Materials[1]`)
     trail_material: Option<Material>,
+    sprite_mask: Option<SpriteMask>,
+    /// `m_MaskInteraction` of the node's `SpriteRenderer` / `ParticleSystemRenderer`:
+    /// 0 none, 1 visible inside masks, 2 visible outside masks
+    mask_interaction: u8,
+}
+
+/// `SpriteMask`: the sprite's texels passing `alpha ≥ m_MaskAlphaCutoff` mark the mask area
+/// (stencil) for renderers whose sorting order is in (back, front] (custom range) or any.
+#[derive(Debug, Clone)]
+struct SpriteMask {
+    sprite: Sprite,
+    cutoff: f32,
+    range: Option<(i32, i32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -326,6 +339,8 @@ impl Prefab {
                 canvas_order: None,
                 system: None,
                 trail_material: None,
+                sprite_mask: None,
+                mask_interaction: 0,
             };
             let comps: Vec<i64> = go["m_Component"]
                 .as_array()
@@ -343,7 +358,26 @@ impl Prefab {
                         ps = Some(ct);
                         system_of.insert(c, systems.len());
                     }
-                    199 => psr = Some(ct),
+                    199 => {
+                        node.mask_interaction = ct["m_MaskInteraction"].as_i64().unwrap_or(0) as u8;
+                        psr = Some(ct);
+                    }
+                    331 => {
+                        if ct["m_Enabled"].as_i64().unwrap_or(1) != 0
+                            && let Some(s) = sprite(pid(&ct["m_Sprite"]))
+                        {
+                            let custom = ct["m_IsCustomRangeActive"].as_i64().unwrap_or(0) != 0
+                                || ct["m_IsCustomRangeActive"].as_bool() == Some(true);
+                            let order = |k: &str| ct[k].as_i64().unwrap_or(0) as i32;
+                            node.sprite_mask = Some(SpriteMask {
+                                sprite: s,
+                                cutoff: f(&ct["m_MaskAlphaCutoff"]),
+                                range: custom.then(|| {
+                                    (order("m_BackSortingOrder"), order("m_FrontSortingOrder"))
+                                }),
+                            });
+                        }
+                    }
                     223 => {
                         if ct["m_OverrideSorting"].as_bool().unwrap_or(false)
                             || ct["m_OverrideSorting"].as_i64() == Some(1)
@@ -353,6 +387,7 @@ impl Prefab {
                         }
                     }
                     212 => {
+                        node.mask_interaction = ct["m_MaskInteraction"].as_i64().unwrap_or(0) as u8;
                         if ct["m_Enabled"].as_i64().unwrap_or(1) != 0
                             && let Some(s) = sprite(pid(&ct["m_Sprite"]))
                         {
@@ -715,6 +750,19 @@ pub struct EffectQuad {
     pub color: [f32; 4],
     pub tex: Option<String>,
     pub blend: Blend,
+    pub mask: Option<QuadMask>,
+}
+
+/// The `SpriteMask` a quad interacts with, in the quad's corner space.
+#[derive(Debug, Clone)]
+pub struct QuadMask {
+    /// Corners (−,−) (+,−) (+,+) (−,+) of the mask sprite.
+    pub corners: [[f32; 2]; 4],
+    /// Texture rect u0, v0, u1, v1 (v down).
+    pub uv: [f32; 4],
+    pub tex: String,
+    pub cutoff: f32,
+    pub outside: bool,
 }
 
 /// Corner UVs of an image rect (u0, v0, u1, v1, v down) for corners (−,−) (+,−) (+,+) (−,+)
@@ -1094,6 +1142,55 @@ impl EffectInstance {
         let wu = canvas[1] * 0.5; // canvas pixels per scenario-camera world unit
         let mut out: Vec<(i32, f32, usize, EffectQuad)> = Vec::new();
         let mut seq = 0usize;
+        // active sprite masks, placed like a `SpriteRenderer`'s sprite
+        let masks: Vec<(QuadMask, Option<(i32, i32)>)> = (0..self.prefab.nodes.len())
+            .filter(|&i| self.effective_active(i))
+            .filter_map(|i| {
+                let m = self.prefab.nodes[i].sprite_mask.as_ref()?;
+                let w = world[i];
+                let s = &m.sprite;
+                let (sw, sh) = (s.size[0] / s.ppu, s.size[1] / s.ppu);
+                let (x0, y0) = (-s.pivot[0] * sw, -s.pivot[1] * sh);
+                let tf = |p: [f32; 2]| {
+                    [
+                        w[0] * p[0] + w[1] * p[1] + w[2],
+                        w[3] * p[0] + w[4] * p[1] + w[5],
+                    ]
+                };
+                Some((
+                    QuadMask {
+                        corners: [
+                            tf([x0, y0]),
+                            tf([x0 + sw, y0]),
+                            tf([x0 + sw, y0 + sh]),
+                            tf([x0, y0 + sh]),
+                        ],
+                        uv: s.tex.uv,
+                        tex: s.tex.png.clone(),
+                        cutoff: m.cutoff,
+                        outside: false,
+                    },
+                    m.range,
+                ))
+            })
+            .collect();
+        // Some(mask) to draw with; None: not drawn (inside a mask that does not exist)
+        let mask_for = |interaction: u8, order: i32| -> Option<Option<QuadMask>> {
+            if interaction == 0 {
+                return Some(None);
+            }
+            let hit = masks
+                .iter()
+                .find(|(_, r)| r.is_none_or(|(back, front)| back < order && order <= front));
+            match (hit, interaction) {
+                (Some((m, _)), _) => Some(Some(QuadMask {
+                    outside: interaction == 2,
+                    ..m.clone()
+                })),
+                (None, 2) => Some(None),
+                (None, _) => None,
+            }
+        };
         for i in 0..self.prefab.nodes.len() {
             if !self.effective_active(i) {
                 continue;
@@ -1130,11 +1227,14 @@ impl EffectInstance {
                         color: self.color[i],
                         tex,
                         blend: Blend::Alpha,
+                        mask: None,
                     },
                 ));
                 seq += 1;
             }
-            if let Some((s, _, order)) = &node.sprite_renderer {
+            if let Some((s, _, order)) = &node.sprite_renderer
+                && let Some(mask) = mask_for(node.mask_interaction, *order)
+            {
                 let (sw, sh) = (s.size[0] / s.ppu, s.size[1] / s.ppu);
                 let (x0, y0) = (-s.pivot[0] * sw, -s.pivot[1] * sh);
                 let corners = [
@@ -1154,11 +1254,17 @@ impl EffectInstance {
                         color: self.sprite_color[i],
                         tex: Some(s.tex.png.clone()),
                         blend: Blend::Alpha,
+                        mask,
                     },
                 ));
                 seq += 1;
             }
-            if let Some((si, mat)) = &node.system {
+            if let Some((si, mat)) = &node.system
+                && let Some(mask) = mask_for(
+                    node.mask_interaction,
+                    self.prefab.systems[*si].sorting_order,
+                )
+            {
                 let def = &self.prefab.systems[*si];
                 // `ScalingMode.Local`: position from the hierarchy, the system's own scale only;
                 // world-space particles carry their emission point, relative to the parent
@@ -1210,7 +1316,10 @@ impl EffectInstance {
                 });
                 // trails (with their own material) under the particles
                 let trail_tex = node.trail_material.as_ref().and_then(|m| m.tex.clone());
-                let trail_blend = node.trail_material.as_ref().map_or(Blend::Alpha, |m| m.blend);
+                let trail_blend = node
+                    .trail_material
+                    .as_ref()
+                    .map_or(Blend::Alpha, |m| m.blend);
                 let trails = self.systems[*si]
                     .trail_quads(def, rot)
                     .into_iter()
@@ -1246,6 +1355,7 @@ impl EffectInstance {
                             color,
                             tex: tex.as_ref().map(|t| t.png.clone()),
                             blend,
+                            mask: mask.clone(),
                         },
                     ));
                 }

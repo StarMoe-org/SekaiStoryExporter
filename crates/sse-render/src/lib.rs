@@ -323,6 +323,7 @@ impl Renderer {
                         [u0, 1.0 - v1],
                     ],
                     color,
+                    mask: None,
                 });
             }
         }
@@ -509,12 +510,23 @@ impl Renderer {
                 Some(t) => self.image(t)?,
                 None => self.white.id,
             };
+            let mask = match &q.mask {
+                Some(m) => Some(gpu::MaskDraw {
+                    image: self.image(&m.tex)?,
+                    corners: m.corners.map(to_screen),
+                    uv: m.uv,
+                    cutoff: m.cutoff,
+                    outside: m.outside,
+                }),
+                None => None,
+            };
             let d = gpu::ParticleDraw {
                 additive: q.blend == effect::Blend::Additive,
                 image,
                 corners: q.corners.map(to_screen),
                 uvs: q.uvs,
                 color: q.color,
+                mask,
             };
             if q.order < SCENARIO_LAYER_ORDER {
                 plan.effects_back.push(d);

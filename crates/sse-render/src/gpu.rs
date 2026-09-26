@@ -135,6 +135,43 @@ pub struct ParticleDraw {
     pub uvs: [[f32; 2]; 4],
     /// Vertex colour, straight alpha (`startColor × colourOverLifetime`).
     pub color: [f32; 4],
+    /// `SpriteMask` interaction.
+    pub mask: Option<MaskDraw>,
+}
+
+/// A `SpriteMask` a draw interacts with, in target pixels.
+pub struct MaskDraw {
+    pub image: ImageId,
+    /// Corners (−,−) (+,−) (+,+) (−,+) of the mask sprite.
+    pub corners: [[f32; 2]; 4],
+    /// The sprite's texture rect u0, v0, u1, v1 (v down).
+    pub uv: [f32; 4],
+    pub cutoff: f32,
+    /// `VisibleOutsideMask` (else `VisibleInsideMask`).
+    pub outside: bool,
+}
+
+impl MaskDraw {
+    /// (mask0, mask1): the corner (−,−) and the inverse of the basis ((+,−) − (−,−),
+    /// (−,+) − (−,−)), mapping a pixel to the sprite's (s, t) in [0, 1]².
+    fn params(&self) -> ([f32; 4], [f32; 4]) {
+        let c = self.corners;
+        let (a, b) = (
+            [c[1][0] - c[0][0], c[1][1] - c[0][1]],
+            [c[3][0] - c[0][0], c[3][1] - c[0][1]],
+        );
+        let det = a[0] * b[1] - b[0] * a[1];
+        let det = if det.abs() < 1e-9 { 1e-9 } else { det };
+        (
+            [c[0][0], c[0][1], b[1] / det, -b[0] / det],
+            [
+                -a[1] / det,
+                a[0] / det,
+                if self.outside { 2.0 } else { 1.0 },
+                self.cutoff,
+            ],
+        )
+    }
 }
 
 pub struct CharacterDraw {
@@ -203,6 +240,12 @@ struct QuadGpu {
     target: [f32; 4],
     /// mode 2 (hologram): `_Line`, `_SubColor.a`, `_SubTex.r`
     extra: [f32; 4],
+    /// Sprite mask (particles): origin corner xy, inverse basis row 0
+    mask0: [f32; 4],
+    /// inverse basis row 1, interaction (1 inside, 2 outside, 0 none), alpha cutoff
+    mask1: [f32; 4],
+    /// mask sprite's texture rect u0, v0, u1, v1 (v down)
+    mask2: [f32; 4],
 }
 
 #[repr(C)]
@@ -387,6 +430,7 @@ impl Gpu {
                 },
                 tex_entry(1),
                 smp_entry(2),
+                tex_entry(3),
             ],
         });
         let cubism_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -801,6 +845,16 @@ impl Gpu {
     }
 
     fn quad_bind(&mut self, image: ImageId, q: QuadGpu) -> wgpu::BindGroup {
+        self.quad_bind_masked(image, q, None)
+    }
+
+    fn quad_bind_masked(
+        &mut self,
+        image: ImageId,
+        q: QuadGpu,
+        mask: Option<ImageId>,
+    ) -> wgpu::BindGroup {
+        let mask = mask.unwrap_or(self.white);
         use wgpu::util::DeviceExt;
         let buf = self
             .device
@@ -824,6 +878,10 @@ impl Gpu {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.images[mask.0].view),
                 },
             ],
         });
@@ -855,6 +913,10 @@ impl Gpu {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.images[self.white.0].view),
                 },
             ],
         });
@@ -889,6 +951,9 @@ impl Gpu {
                             (Some([sd, dist]), _) => [sd, dist, 0.0, 0.0],
                             (None, b) => [b.unwrap_or(0.0), 0.0, 0.0, 0.0],
                         },
+                        mask0: [0.0; 4],
+                        mask1: [0.0; 4],
+                        mask2: [0.0; 4],
                     },
                 )
             })
@@ -938,8 +1003,26 @@ impl Gpu {
             color: [1.0; 4],
             target: [w, h, 0.0, 0.0],
             extra: [0.0; 4],
+            mask0: [0.0; 4],
+            mask1: [0.0; 4],
+            mask2: [0.0; 4],
         };
-        let bgs: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.quad_bind(d.image, q)).collect();
+        let bgs: Vec<wgpu::BindGroup> = draws
+            .iter()
+            .map(|d| match &d.mask {
+                Some(m) => {
+                    let (mask0, mask1) = m.params();
+                    let q = QuadGpu {
+                        mask0,
+                        mask1,
+                        mask2: m.uv,
+                        ..q
+                    };
+                    self.quad_bind_masked(d.image, q, Some(m.image))
+                }
+                None => self.quad_bind(d.image, q),
+            })
+            .collect();
         let mut rp = Self::pass(enc, target, None);
         rp.set_vertex_buffer(0, vbuf.slice(..));
         for (i, d) in draws.iter().enumerate() {
@@ -1181,6 +1264,9 @@ impl Gpu {
                 color: [c.color[0], c.color[1], c.color[2], c.opacity],
                 target: [w, h, mode, 0.0],
                 extra,
+                mask0: [0.0; 4],
+                mask1: [0.0; 4],
+                mask2: [0.0; 4],
             };
             let bg = self.view_bind(&rt_view, bytemuck::bytes_of(&q));
             self.draw_quads(&mut enc, &self.scene.view, &[bg], None);

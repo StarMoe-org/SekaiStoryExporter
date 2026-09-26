@@ -69,11 +69,15 @@ struct Quad {
     color: vec4<f32>,  // vertex colour
     dst: vec4<f32>,    // target w, h, mode, _
     extra: vec4<f32>,  // mode 2: _Line, _SubColor.a, _SubTex.r; mode 3: _SamplingDistance
+    mask0: vec4<f32>,  // sprite mask: corner xy, inverse basis row 0
+    mask1: vec4<f32>,  // inverse basis row 1, interaction (1 inside / 2 outside), cutoff
+    mask2: vec4<f32>,  // mask sprite texture rect u0, v0, u1, v1
 };
 
 @group(0) @binding(0) var<uniform> quad: Quad;
 @group(0) @binding(1) var quad_tex: texture_2d<f32>;
 @group(0) @binding(2) var quad_smp: sampler;
+@group(0) @binding(3) var quad_mask: texture_2d<f32>;
 
 struct QuadOut {
     @builtin(position) pos: vec4<f32>,
@@ -252,7 +256,23 @@ fn particle_vs(@location(0) px: vec2<f32>, @location(1) uv: vec2<f32>, @location
 
 // `Sekai/Particles/{Additive,AlphaBlended}`: `SV_Target0 = tex × COLOR0`; the blend state
 // does the rest.
+// `SpriteMask` interaction: the mask writes stencil where its sprite passes the alpha test
+// (`clip(a - _Cutoff)`); `VisibleInsideMask` draws only there, `VisibleOutsideMask` only
+// elsewhere.
 @fragment
 fn particle_fs(i: ParticleOut) -> @location(0) vec4<f32> {
-    return textureSample(quad_tex, quad_smp, i.uv) * i.color;
+    let c = textureSample(quad_tex, quad_smp, i.uv) * i.color;
+    if (quad.mask1.z > 0.5) {
+        let d = i.pos.xy - quad.mask0.xy;
+        let st = vec2<f32>(dot(quad.mask0.zw, d), dot(quad.mask1.xy, d));
+        var inside = false;
+        if (all(st >= vec2<f32>(0.0)) && all(st <= vec2<f32>(1.0))) {
+            let uv = vec2<f32>(mix(quad.mask2.x, quad.mask2.z, st.x), mix(quad.mask2.w, quad.mask2.y, st.y));
+            inside = textureSampleLevel(quad_mask, quad_smp, uv, 0.0).a - quad.mask1.w >= 0.0;
+        }
+        if (inside != (quad.mask1.z < 1.5)) {
+            discard;
+        }
+    }
+    return c;
 }
