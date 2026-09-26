@@ -165,6 +165,8 @@ pub struct Prefab {
     animator: Option<Animator>,
     stop_destroys: bool,
     play_on_enable: bool,
+    /// Birth sub-emitters of each system (system indices).
+    subs: Vec<Vec<usize>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -286,6 +288,8 @@ impl Prefab {
             .ok_or_else(|| EffectError::Load(name.into(), "no root transform".into()))?;
         let mut nodes: Vec<Node> = Vec::new();
         let mut systems = Vec::new();
+        // ParticleSystem path id → system index (sub-emitter references)
+        let mut system_of: BTreeMap<i64, usize> = BTreeMap::new();
         let mut animator_ctrl = None;
         let mut stop_destroys = true;
         let mut play_on_enable = true;
@@ -332,7 +336,10 @@ impl Prefab {
             for c in comps {
                 let Some(ct) = tree(c) else { continue };
                 match class(c) {
-                    198 => ps = Some(ct),
+                    198 => {
+                        ps = Some(ct);
+                        system_of.insert(c, systems.len());
+                    }
                     199 => psr = Some(ct),
                     223 => {
                         if ct["m_OverrideSorting"].as_bool().unwrap_or(false)
@@ -454,12 +461,22 @@ impl Prefab {
             Some(ctrl) => Some(load_animator(&dir, &by, ctrl, &nodes)?),
             None => None,
         };
+        let subs = systems
+            .iter()
+            .map(|d: &SystemDef| {
+                d.sub_birth
+                    .iter()
+                    .filter_map(|id| system_of.get(id).copied())
+                    .collect()
+            })
+            .collect();
         Ok(Prefab {
             nodes,
             systems,
             animator,
             stop_destroys,
             play_on_enable,
+            subs,
         })
     }
 }
@@ -765,6 +782,11 @@ impl EffectInstance {
             dt,
         };
         let _ = n;
+        for subs in &inst.prefab.subs {
+            for &j in subs {
+                inst.systems[j].sub_only = true;
+            }
+        }
         inst.apply_animator();
         // `playOnAwake` systems in the active hierarchy start on instantiation
         for i in 0..inst.prefab.nodes.len() {
@@ -887,6 +909,17 @@ impl EffectInstance {
             }
             if now {
                 self.systems[s].step(def, dt);
+            }
+        }
+        // Birth sub-emitters follow their parents' live particles
+        for p in 0..self.prefab.subs.len() {
+            if self.prefab.subs[p].is_empty() {
+                continue;
+            }
+            let origins = self.systems[p].particle_origins();
+            for &j in &self.prefab.subs[p] {
+                let def = &self.prefab.systems[j];
+                self.systems[j].sync_subs(def, &origins);
             }
         }
         if let Some(at) = self.stopped_at {
@@ -1094,7 +1127,45 @@ impl EffectInstance {
                 let (sx, sy) = (self.scale[i][0], self.scale[i][1]);
                 let tex = mat.as_ref().and_then(|m| m.tex.clone());
                 let blend = mat.as_ref().map_or(Blend::Alpha, |m| m.blend);
-                for (corners, uvs, color, custom1) in self.systems[*si].quads(def) {
+                // the emitter's rotation: its own (3D) under its parent's (z)
+                let q = node.rot;
+                let parent_angle = node
+                    .parent
+                    .map_or(0.0, |pi| world[pi][3].atan2(world[pi][0]));
+                let turned = q[0].abs() > 1e-4
+                    || q[1].abs() > 1e-4
+                    || q[2].abs() > 1e-4
+                    || parent_angle.abs() > 1e-6;
+                let rot = turned.then(|| {
+                    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+                    let m = [
+                        [
+                            1.0 - 2.0 * (y * y + z * z),
+                            2.0 * (x * y - z * w),
+                            2.0 * (x * z + y * w),
+                        ],
+                        [
+                            2.0 * (x * y + z * w),
+                            1.0 - 2.0 * (x * x + z * z),
+                            2.0 * (y * z - x * w),
+                        ],
+                        [
+                            2.0 * (x * z - y * w),
+                            2.0 * (y * z + x * w),
+                            1.0 - 2.0 * (x * x + y * y),
+                        ],
+                    ];
+                    let (s, c) = (sinf(parent_angle), cosf(parent_angle));
+                    let rz = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+                    let mut out = [[0.0f32; 3]; 3];
+                    for (r, row) in out.iter_mut().enumerate() {
+                        for (k, cell) in row.iter_mut().enumerate() {
+                            *cell = (0..3).map(|j| rz[r][j] * m[j][k]).sum();
+                        }
+                    }
+                    out
+                });
+                for (corners, uvs, color, custom1) in self.systems[*si].quads_rotated(def, rot) {
                     let blend = match blend {
                         Blend::ByCustom1 if custom1 > 0.5 => Blend::Additive,
                         Blend::ByCustom1 => Blend::Alpha,

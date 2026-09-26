@@ -297,6 +297,8 @@ pub struct SystemDef {
     rotation_ol_xy: Option<[Curve; 2]>,
     /// Mesh render mode geometry (the built-in quad unless the prefab loader sets one).
     pub mesh: Option<std::sync::Arc<Mesh>>,
+    /// `SubModule` Birth sub-emitters: their `ParticleSystem` path ids.
+    pub sub_birth: Vec<i64>,
     noise: Option<(Curve, f32, bool)>,
     /// tiles x, tiles y, frame over time, start frame, cycles, single row
     sheet: Option<(u32, u32, Curve, Curve, f32, Option<u32>)>,
@@ -424,6 +426,17 @@ impl SystemDef {
                     ]
                 }),
             mesh: None,
+            sub_birth: if bv(&ps["SubModule"], "enabled") {
+                ps["SubModule"]["subEmitters"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|e| e["type"].as_i64().unwrap_or(0) == 0)
+                    .filter_map(|e| e["emitter"]["m_PathID"].as_i64().filter(|&id| id != 0))
+                    .collect()
+            } else {
+                Vec::new()
+            },
             noise: on("NoiseModule").then(|| {
                 let n = &ps["NoiseModule"];
                 (
@@ -657,6 +670,23 @@ pub struct SystemState {
     emit_acc: f32,
     /// Bursts fired in the current loop: (loop index, burst, cycle).
     fired: Vec<(u32, usize, u32)>,
+    /// This system is another's Birth sub-emitter: it emits only from `subs`.
+    pub sub_only: bool,
+    /// Birth sub-emitter sources: one per live parent particle.
+    subs: Vec<SubSource>,
+}
+
+/// A Birth sub-emitter instance riding on a parent particle (`SubModule`, type Birth): the
+/// system's emission (rate and bursts on its own clock) from the parent's position, until the
+/// parent dies.
+#[derive(Debug, Clone)]
+struct SubSource {
+    parent: u32,
+    origin: [f32; 3],
+    time: f32,
+    emit_acc: f32,
+    fired: Vec<(u32, usize, u32)>,
+    alive: bool,
 }
 
 fn next_u32(s: &mut u32) -> u32 {
@@ -713,6 +743,39 @@ impl SystemState {
             emitting: false,
             emit_acc: 0.0,
             fired: Vec::new(),
+            sub_only: false,
+            subs: Vec::new(),
+        }
+    }
+
+    /// (seed, position) of every live particle, for sub-emitters.
+    pub fn particle_origins(&self) -> Vec<(u32, [f32; 3])> {
+        self.particles.iter().map(|p| (p.seed, p.pos)).collect()
+    }
+
+    /// Keeps one Birth sub-emitter source per live parent particle (new parents start one,
+    /// dead ones stop emitting) and moves them with their parents.
+    pub fn sync_subs(&mut self, def: &SystemDef, parents: &[(u32, [f32; 3])]) {
+        for s in &mut self.subs {
+            match parents.iter().find(|(seed, _)| *seed == s.parent) {
+                Some((_, pos)) => s.origin = *pos,
+                None => s.alive = false,
+            }
+        }
+        self.subs.retain(|s| s.alive);
+        for &(seed, pos) in parents {
+            if !self.subs.iter().any(|s| s.parent == seed) {
+                // the sub system's own start delay counts from the parent's birth
+                let delay = def.start_delay.eval(unit(&mut self.rng), 0.0);
+                self.subs.push(SubSource {
+                    parent: seed,
+                    origin: pos,
+                    time: -delay,
+                    emit_acc: 0.0,
+                    fired: Vec::new(),
+                    alive: true,
+                });
+            }
         }
     }
 
@@ -746,7 +809,7 @@ impl SystemState {
     }
 
     pub fn is_alive(&self, def: &SystemDef) -> bool {
-        if !self.particles.is_empty() {
+        if !self.particles.is_empty() || !self.subs.is_empty() {
             return true;
         }
         match self.time {
@@ -756,6 +819,52 @@ impl SystemState {
     }
 
     pub fn step(&mut self, def: &SystemDef, dt: f32) {
+        if self.sub_only {
+            // driven by the parent: particles age, sources emit on their own clocks
+            let dt = dt * def.sim_speed;
+            self.update(def, dt);
+            let mut subs = std::mem::take(&mut self.subs);
+            for s in &mut subs {
+                s.time += dt;
+                if s.time < 0.0 {
+                    continue;
+                }
+                let t1 = s.time;
+                let dur = def.duration.max(1e-4);
+                let (loop_i, in_loop) = if def.looping {
+                    ((t1 / dur) as u32, t1 % dur)
+                } else if t1 > dur {
+                    continue;
+                } else {
+                    (0, t1)
+                };
+                let sys_t = in_loop / dur;
+                s.emit_acc += def.rate.eval(unit(&mut self.rng), sys_t) * dt;
+                while s.emit_acc >= 1.0 {
+                    s.emit_acc -= 1.0;
+                    self.spawn_at(def, sys_t, s.origin);
+                }
+                for (bi, b) in def.bursts.iter().enumerate() {
+                    for c in 0..b.cycles.max(1) {
+                        let at = b.time + b.interval * c as f32;
+                        if in_loop + 1e-6 < at || s.fired.contains(&(loop_i, bi, c)) {
+                            continue;
+                        }
+                        s.fired.push((loop_i, bi, c));
+                        if unit(&mut self.rng) > b.probability {
+                            continue;
+                        }
+                        let n = b.count.eval(unit(&mut self.rng), 0.0).round().max(0.0) as u32;
+                        for _ in 0..n {
+                            self.spawn_at(def, sys_t, s.origin);
+                        }
+                    }
+                }
+                s.fired.retain(|&(l, _, _)| l + 1 >= loop_i);
+            }
+            self.subs = subs;
+            return;
+        }
         let Some(time) = self.time else { return };
         let dt = dt * def.sim_speed;
         let t1 = time + dt;
@@ -803,6 +912,10 @@ impl SystemState {
     }
 
     fn spawn(&mut self, def: &SystemDef, sys_t: f32) {
+        self.spawn_at(def, sys_t, [0.0; 3]);
+    }
+
+    fn spawn_at(&mut self, def: &SystemDef, sys_t: f32, origin: [f32; 3]) {
         if self.particles.len() >= def.max_particles {
             return;
         }
@@ -823,6 +936,7 @@ impl SystemState {
         } else {
             ([0.0; 3], [0.0, 0.0, 1.0])
         };
+        let pos = [pos[0] + origin[0], pos[1] + origin[1], pos[2] + origin[2]];
         let vel = [dir[0] * speed, dir[1] * speed, dir[2] * speed];
         let color = def.color.eval(unit(r), sys_t);
         let sz = def
@@ -879,13 +993,19 @@ impl SystemState {
                     v[2] += n.2 * k;
                 }
             }
+            // Limit Velocity acts on the total velocity (base + velocity over lifetime); the
+            // excess is taken out of the base velocity. Dampen is the fraction removed per
+            // 1/30 s step (the Unity runtime's own step is not reversed: approximation).
             if let Some((limit, dampen)) = &def.clamp {
                 let lim = limit.eval(p.rnd[6], t).max(1e-5);
-                let mag = (p.vel[0] * p.vel[0] + p.vel[1] * p.vel[1] + p.vel[2] * p.vel[2]).sqrt();
+                let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
                 if mag > lim {
-                    let f = 1.0 - (1.0 - lim / mag) * dampen.clamp(0.0, 1.0);
-                    for c in &mut p.vel {
-                        *c *= f;
+                    let per_step = 1.0 - (1.0 - lim / mag) * dampen.clamp(0.0, 1.0);
+                    let f = sse_core::det_math::powf(per_step.max(0.0), dt * 30.0);
+                    for i in 0..3 {
+                        let limited = v[i] * f;
+                        p.vel[i] += limited - v[i];
+                        v[i] = limited;
                     }
                 }
             }
@@ -906,9 +1026,24 @@ impl SystemState {
 
     /// Quads in the emitter's local frame (world units): corners (−,−) (+,−) (+,+) (−,+),
     /// UV rect (u0, v0, u1, v1 with v up) and colour. `stretch` directions are in local space.
-    pub fn quads(&self, def: &SystemDef) -> Vec<Quad> {
+    /// Quads in the emitter's local frame (world units), with the local simulation space turned by `rot` (row-major 3×3)
+    /// before the orthographic projection: positions and stretch directions follow the
+    /// emitter's rotation, billboard corners keep facing the camera.
+    pub fn quads_rotated(&self, def: &SystemDef, rot: Option<[[f32; 3]; 3]>) -> Vec<Quad> {
+        let turn = |v: [f32; 3]| match rot {
+            Some(m) => [
+                m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+                m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+                m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+            ],
+            None => v,
+        };
         let mut out = Vec::with_capacity(self.particles.len());
-        for p in &self.particles {
+        for p0 in &self.particles {
+            let mut moved = p0.clone();
+            moved.pos = turn(p0.pos);
+            moved.cur_vel = turn(p0.cur_vel);
+            let p = &moved;
             let t = (p.age / p.life).clamp(0.0, 1.0);
             let mut c = p.color;
             if let Some(ol) = &def.color_ol {
