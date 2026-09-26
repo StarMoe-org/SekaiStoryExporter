@@ -436,9 +436,11 @@ impl Renderer {
         for e in &frame.effects {
             let pk = (e.bundle.clone(), e.name.clone());
             if !self.prefabs.contains_key(&pk) {
-                let p = effect::Prefab::load(&self.lib, &e.bundle, &e.name)
-                    .ok()
-                    .map(std::sync::Arc::new);
+                let p = match effect::Prefab::load(&self.lib, &e.bundle, &e.name) {
+                    Ok(p) => Some(std::sync::Arc::new(p)),
+                    Err(effect::EffectError::Asset(e)) => return Err(e.into()),
+                    Err(effect::EffectError::Load(..)) => None,
+                };
                 self.prefabs.insert(pk.clone(), p);
             }
             let Some(prefab) = self.prefabs[&pk].clone() else {
