@@ -18,9 +18,57 @@ together with its impact.
   扫描线贴图 `holo.png` 由 `tools/ui-kit/extract.py` 从客户端导出。参数表 v5。
   **像素影响**：使用全息效果的剧集（如日服活动 217 第 3、4、7 话）中，对应角色显示为全息投影并带粒子特效；此前按普通角色绘制。
   Character shader "hologram" / "monitor" is rendered (material, flicker, attached particle prefab).
+- **镜头移动 / 缩放、背景模糊（特效 42 / 43 / 44）**：42 `ScenarioStudioCamera.CameraMove` 对正交的剧情相机做 `DOLocalMove`（参考像素），
+  43 对 `scenarioRoot` 做 `DOScale`（背景、角色、特效一起缩放，UI 层不动），44 给背景换 `UIGaussianBlur` 材质（横竖各 7 采样，
+  权重 0.036/0.113/0.216/0.269，`_SamplingDistance` 2.8）。角色着色器 "blur" 按 `Live2DBlurController` 与 `Live2DBlur` 材质实现。
+  **像素影响**：使用这些特效的剧集中画面平移、缩放、背景或角色变模糊；此前忽略。
+  Camera move / zoom, background blur and the character blur shader are rendered.
+- **Dolly zoom（日服特效 45）**：解析 `Zoom：z, Blur：b, Dist：d`，背景父节点按 `StringValSub` 缓动 `DOScale`，
+  背景换 `UIDollyZoomEffect`（桶形畸变 + 高斯模糊，畸变强度 = Dist × −(Zoom − 1)），`ShouldClearBlur` 逻辑与游戏一致。新增 DOTween 缓动曲线。
+  **像素影响**：日服使用 dolly zoom 的剧集背景放大并畸变模糊；此前忽略。
+  Dolly zoom (JP effect 45) is rendered.
+- **简单选项（特效 23）**：`AnswerChoiceDialog` 按预制体布局绘制（520×96 按钮、FOT-RodinNTLGPro-EB 32 号字），0.125 s 缩放出现 / 消失；
+  导出时在对话框打开 1.5 s 后自动选第一个选项（玩家输入，写入报告），选择后等 0.5 s 结束。UI 套件新增 `btn_round_h80_wh`。
+  **像素影响**：含选项的剧集显示选项对话框，时长相应增加；此前立即跳过。
+  Simple selectable choices are shown; the export picks the first answer after 1.5 s.
+- **非出场 Layout 的换装**：`CheckAndChangeCostume` 在按类型分支前执行：服装不同时先用一帧淡出到 0 并隐藏，再换模型。IR v4：`Layout.costume`。
+  **像素影响**：剧中换装的角色现在换成新服装（此前一直是旧服装）。
+  Costume changes on layouts of every type swap the model, as the game does.
+- **BGM 音量渐变（Sound PlayMode 4）**：`AisacVolumeBGM`（类别 AISAC `VOL_BGM_SCE`，线性）按 Duration 渐变，参数表 v5 `bgm_volume`。无像素影响，BGM 音量变化。
+  BGM volume tweens are mixed.
+- **互动 BGM（Sound PlayMode 5 / 6）**：读取 ACB 的 block sequence（每个 block 的长度、循环、切换时机、各轨波形）和各层 AISAC。
+  PlayMode 6 `SetBgmBlockIndex` 在当前 block 为奇数时等待，再切换；循环 block 重复，其余播放 NumLoops + 1 次后前进；
+  切换时机 1 时在 block 的 N 等分点切换（CRI 运行时未逆向，近似，写入报告）。PlayMode 5 `BGM_VERTICAL` 调各层音量。
+  此前把一个分块 BGM 的全部波形同时混音。无像素影响。
+  Interactive (block) BGMs play block by block with their vertical layers.
+- **特效动画事件**：`CommandAnimator` 的 `OnPlayParticle` / `OnStopParticle`（播放 / 停止指定路径的粒子），
+  `OnPlayEnvironmentSE` / `OnStopEnvironmentSE` / `OnSetEnvironmentSEFadeTime` / `OnSetEnvironmentSEVolume` / `OnPlaySE`（特效自带 ACB 的音效）。
+  **像素影响**：靠动画事件启动的粒子现在出现；特效音效（烟花声等）现在播放。
+  Effect animation events start / stop particles and play the effects' own sounds.
+- **粒子系统补全**：Mesh 渲染（内置 Quad / Cube 与 bundle 内网格）、3D 起始旋转与分轴旋转、Birth 子发射器（遵守子系统 startDelay）、
+  限速按总速度计算（阻尼按 1/30 s 步长，近似）、发射器旋转、World 模拟空间、SizeBySpeed / RotationBySpeed、Donut 与 Sprite 发射形状（Sprite 按矩形近似）、
+  `ParentRectFitter`，以及拖尾（TrailModule，Particles 模式：按 minVertexDistance 记录轨迹点，宽度 / 颜色随拖尾与寿命变化，使用渲染器第二个材质）。
+  **像素影响**：烟花、流星、斩击等特效的形状与运动接近游戏（此前网格粒子是平面方块、烟花不爆炸、流星没有尾巴）。
+  Particle systems gain mesh rendering, 3D rotation, sub-emitters, world space, speed modules, more shapes and trails.
+- **SpriteMask**：`SpriteRenderer` / `ParticleSystemRenderer` 的 `m_MaskInteraction` 1 / 2 只在遮罩精灵（alpha ≥ `m_MaskAlphaCutoff`）内 / 外绘制，
+  自定义范围按排序 (back, front] 生效。依赖 SekaiStoryRipper 导出 `_textures/`（遮罩使用的内置 `Square` 等无 container 路径的贴图）。
+  **像素影响**：cut-in 等特效的光效只出现在斜向条带内；饮料杯后的三角形被杯子遮住。
+  SpriteMask is applied to effect sprites and particles.
+- **更多特效动画属性**：`localEulerAnglesRaw` x / y / z（按 Unity 的 z-x-y 顺序做 3D 旋转，正交相机只看到 x / y 投影，静态的 3D 旋转也一样生效）、
+  `RectTransform.m_LocalPosition.z`、`SpriteRenderer.m_Color` 与 `material._Color`、粒子的 `looping`（关掉后播完当前一轮）、
+  爆发数量 `m_Bursts[i].countCurve.scalar`、起始颜色 `startColor` min / max。
+  **像素影响**：聚光灯等绕 x / y 旋转的精灵按透视缩短；cut-in 角色图随动画淡入淡出；雨在停止时不再爆发新雨滴。
+  More animated effect properties drive the nodes and particle systems.
 
 ### 修复 / Fixed
 
+- **Additive+AlphaBlend 粒子**：`Sekai/Particles/Additive+AlphaBlend` 按顶点流 Custom1.x 逐粒子选择叠加或 alpha 混合（`ParticleShaderSettings` 设置），
+  此前全部按 alpha 混合。**像素影响**：这类特效中的叠加粒子变亮。
+  Additive+AlphaBlend particles pick additive or alpha blending per particle.
+- **Layout 抖动（类型 4 / 5）**：游戏抖的是模型视图下的空节点 `shake`，画面上不动；但 snippet 要等抖动结束（0.5 / 0.75 / 0.25 s）才完成。
+  **像素影响**：无；含角色抖动的剧集节奏变慢相应秒数。
+  Layout shakes move nothing on screen but now take their time, as in the game.
+- **角色着色器的其他字符串**：游戏只识别 hologram / monitor / blur / none，其他字符串（如空串）直接结束，不再报告为未支持。无像素影响。
 - **对话框文字描边宽度**：描边层（`WordsOutline` / `NameOutline`，shader `Sekai/TextMeshPro/Mobile/Distance Field`）
   的外扩量按客户端 shader 代码与材质参数计算：`(_FaceDilate 0.5 + _OutlineWidth 0.5) × ratioA / 2` 个 SDF 单位，
   1 SDF 单位 = 12 个图集像素（由游戏自带的 SDF 图集实测），即 4.21 × 字号 / 35 像素。此前只计入了 `_FaceDilate`，

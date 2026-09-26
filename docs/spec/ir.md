@@ -145,6 +145,7 @@ pub struct Talk {
 | 背景 | 7 | `ChangeBackground{background: BackgroundRef, duration}` |
 | 文字 | 8, 18, 24 | `Telop{text}` / `PlaceInfo{text}` / `FullScreenText{text, voice?}` |
 | 相机后处理 | 9, 10, 27, 28, 38, 39, 44 | `CameraColor{effect: Flashback\|Sepia}` / `CameraColorOff` / `Blur{dir, duration}` / `BackgroundBlur(bool)` |
+| Dolly zoom | 45（日服） | `DollyZoom{zoom?, blur?, dist?, ease}`（`DollyZoomParams` 解析；无 Zoom 时游戏跳过） |
 | 相机变换 | 42, 43 | `CameraMove{x, y, duration}` / `CameraZoom{scale, duration}`；**解析失败照游戏**（42 段数≠2 → `LogError` 后的行为；43 `TryParse` 失败值） |
 | 环境色 | 12–14 | `Ambient(Afternoon\|Evening\|Night)` |
 | 场景特效 | 15, 16 | `PlayScenarioEffect{name, bundle}` / `StopScenarioEffect{name}` |
@@ -152,7 +153,7 @@ pub struct Talk {
 | 转场 | 20, 21, 40, 41, 29–36 | `SekaiTransition{variant, dir}` / `SideFade{fade_type, duration}` |
 | 选项展示 | 23 | `SimpleSelectable{options: Vec<String>}`（按 `/` 切分）；**不是分支**（ADR-0008） |
 | 空实现 | 0, 11, 17 | `Noop`（游戏里只 `FinishSnippet`） |
-| 不支持 | 19 Movie, 37 MusicVideo, ≥45 | `Unsupported{…}`（§4） |
+| 不支持 | 19 Movie, 37 MusicVideo（3D MV，ADR-0011 范围外）, ≥46 | `Unsupported{…}`（§4） |
 
 `bool` / `f32` 字符串的解析函数**必须复刻 .NET `Boolean.TryParse` / `Single.TryParse` 的行为**（含失败时取 `false` / `0`），
 不得用 Rust 默认解析器替代——实装里有 132 条 `StopShakeWindow` 的 `StringVal` 为空串，依赖的正是失败语义。
