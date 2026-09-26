@@ -6,7 +6,8 @@
 //! - Reject unknown `format` / `version` values instead of guessing
 //! - **Explicit failure with a list of missing assets**, pointing at `ripper rip <selector>`.
 //!   Silent degradation is forbidden
-//! - Recording the asset version from `ripper.lock.json`
+//! - Checking the library's `ripper.lock.json` (`ripper-lock`) before reading anything: its
+//!   `formats` table must name the same version of every format this build reads (ADR-0006)
 //! - Mirroring a library kept in S3 into a local cache (`remote`, ADR-0015)
 //!
 //! ## Not responsible for
@@ -22,6 +23,17 @@ use std::path::{Path, PathBuf};
 
 pub use ripper_format::episode::{self, EpisodeIndex};
 pub use ripper_format::motion::{self, SseMotion};
+pub use ripper_format::unpack::{self, FileKind, UnpackRecord};
+pub use ripper_format::{lock, objects};
+
+/// The SekaiStoryRipper release whose `ripper-format` this build uses (the tag in the
+/// workspace `Cargo.toml`; a test keeps them in step).
+macro_rules! ripper_release {
+    () => {
+        "v0.3.0"
+    };
+}
+pub const RIPPER_RELEASE: &str = ripper_release!();
 
 pub mod acb;
 mod audio;
@@ -50,6 +62,15 @@ pub enum AssetError {
         version: u32,
         expected: &'static str,
     },
+    #[error(
+        "{path}: the library's formats ({found}) differ from the ones this build reads \
+         ({expected}); re-export it with SekaiStoryRipper {RIPPER_RELEASE}"
+    )]
+    Contract {
+        path: PathBuf,
+        found: String,
+        expected: String,
+    },
     #[error("{path}: image: {source}")]
     Image {
         path: PathBuf,
@@ -73,12 +94,23 @@ pub enum AssetError {
 
 pub type Result<T> = std::result::Result<T, AssetError>;
 
+/// What a library's `ripper.lock.json` says about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryInfo {
+    /// `cn` or `jp`
+    pub region: String,
+    pub app_version: String,
+    pub asset_version: String,
+}
+
 /// A SekaiStoryRipper output directory (the one holding `library/` and `episodes/`), or a local
 /// mirror of one kept in S3.
 #[derive(Clone)]
 pub struct Library {
     root: PathBuf,
     mirror: Option<std::sync::Arc<remote::Mirror>>,
+    /// The checked lock, for a library opened with [`Library::open_location`].
+    info: Option<LibraryInfo>,
 }
 
 impl std::fmt::Debug for Library {
@@ -115,23 +147,125 @@ impl Library {
         Self {
             root: root.into(),
             mirror: None,
+            info: None,
         }
     }
 
     /// A directory, or `s3://bucket/prefix` mirrored under `cache` (ADR-0015).
     pub fn open_location(location: &str, cache: &Path) -> Result<Self> {
         let Some(s3) = remote::S3Location::parse(location) else {
-            return Ok(Self::open(location));
+            let mut lib = Self::open(location);
+            lib.info = Some(lib.check_formats()?);
+            return Ok(lib);
         };
         let s3 = s3?;
         let mut root = cache.join("s3").join(&s3.bucket);
         root.extend(s3.prefix.split('/').filter(|p| !p.is_empty()));
         let mirror = remote::Mirror::new(remote::S3::new(s3)?, root.clone());
-        mirror.refresh("ripper.lock.json")?;
-        Ok(Self {
+        mirror.refresh(lock::FILE)?;
+        let mut lib = Self {
             root,
             mirror: Some(std::sync::Arc::new(mirror)),
+            info: None,
+        };
+        lib.info = Some(lib.check_formats()?);
+        Ok(lib)
+    }
+
+    /// [`Library::object_graph`] as a JSON map: path id → `{classId, name, tree}`.
+    pub fn object_map(&self, bundle: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
+        Ok(self
+            .object_graph(bundle)?
+            .objects
+            .into_iter()
+            .map(|(id, o)| {
+                let v =
+                    serde_json::json!({ "classId": o.class_id, "name": o.name, "tree": o.tree });
+                (id, v)
+            })
+            .collect())
+    }
+
+    /// The library's lock, when it was opened with [`Library::open_location`].
+    pub fn info(&self) -> Option<&LibraryInfo> {
+        self.info.as_ref()
+    }
+
+    /// Reads `ripper.lock.json` and checks it against the formats this build reads
+    /// (`ripper_format::formats()` of [`RIPPER_RELEASE`]): the lock must be a `ripper-lock`
+    /// document and name the same version of each of them (ADR-0006). Formats this build does
+    /// not know are documents it never reads.
+    pub fn check_formats(&self) -> Result<LibraryInfo> {
+        let path = self.root.join(lock::FILE);
+        let expected = ripper_format::formats();
+        let list = |m: &std::collections::BTreeMap<String, u32>| {
+            m.iter()
+                .map(|(f, v)| format!("{f} v{v}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let lock: ripper_format::Lock<serde::de::IgnoredAny> =
+            read_json(&path).map_err(|e| match e {
+                // a lock from before `ripper-lock` has no format / version
+                AssetError::Json { .. } => AssetError::Contract {
+                    path: path.clone(),
+                    found: "no ripper-lock header".into(),
+                    expected: list(&expected),
+                },
+                e => e,
+            })?;
+        let differs = lock.format != lock::FORMAT
+            || lock.version != lock::VERSION
+            || expected.iter().any(|(f, v)| lock.formats.get(f) != Some(v));
+        if differs {
+            return Err(AssetError::Contract {
+                path,
+                found: list(&lock.formats),
+                expected: list(&expected),
+            });
+        }
+        Ok(LibraryInfo {
+            region: lock.region,
+            app_version: lock.app_version,
+            asset_version: lock.asset_version,
         })
+    }
+
+    /// A bundle's `_ripper.json` (`ripper-unpack`).
+    pub fn unpack_record(&self, bundle: &str) -> Result<UnpackRecord> {
+        let path = self.path(bundle).join(unpack::RECORD_FILE);
+        let record: UnpackRecord = read_json(&path)?;
+        if record.format != unpack::FORMAT || record.version != unpack::VERSION {
+            return Err(AssetError::Format {
+                path,
+                format: record.format,
+                version: record.version,
+                expected: concat!(
+                    "the ripper-unpack of SekaiStoryRipper ",
+                    ripper_release!(),
+                    " (re-export the episode)"
+                ),
+            });
+        }
+        Ok(record)
+    }
+
+    /// A bundle's `_objects.json` (`ripper-objects`): the objects keyed by path id.
+    pub fn object_graph(
+        &self,
+        bundle: &str,
+    ) -> Result<ripper_format::ObjectGraph<serde_json::Value>> {
+        let path = self.path(bundle).join(objects::FILE);
+        let graph: ripper_format::ObjectGraph<serde_json::Value> = read_json(&path)?;
+        if graph.format != objects::FORMAT || graph.version != objects::VERSION {
+            return Err(AssetError::Format {
+                path,
+                format: graph.format,
+                version: graph.version,
+                expected: "ripper-objects v1",
+            });
+        }
+        Ok(graph)
     }
 
     /// The S3 location this library mirrors, if any.
@@ -298,4 +432,75 @@ pub fn load_png(path: &Path) -> Result<image::RgbaImage> {
             path: path.to_owned(),
             source,
         })
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn ripper_release_matches_the_cargo_dependency() {
+        let cargo = include_str!("../../../Cargo.toml");
+        assert!(
+            cargo.contains(&format!("tag = \"{RIPPER_RELEASE}\"")),
+            "RIPPER_RELEASE {RIPPER_RELEASE} is not the ripper-format tag in Cargo.toml"
+        );
+    }
+
+    fn write_lock(dir: &Path, formats: &[(&str, u32)], header: bool) {
+        let formats: serde_json::Map<String, serde_json::Value> = formats
+            .iter()
+            .map(|(f, v)| ((*f).to_owned(), (*v).into()))
+            .collect();
+        let mut lock = serde_json::json!({
+            "toolVersion": "x", "formats": formats, "region": "jp", "appVersion": "6.8.1",
+            "assetVersion": "6.8.0.50", "unityVersion": "2022.3.62f2", "masterdata": null,
+            "episodes": []
+        });
+        if header {
+            lock["format"] = "ripper-lock".into();
+            lock["version"] = 1.into();
+        }
+        std::fs::write(dir.join(lock::FILE), lock.to_string()).unwrap();
+    }
+
+    #[test]
+    fn the_lock_must_name_every_format_this_build_reads() {
+        let dir = std::env::temp_dir().join(format!("sse-lock-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lib = Library::open(&dir);
+        let current: Vec<(String, u32)> = ripper_format::formats().into_iter().collect();
+        let current: Vec<(&str, u32)> = current.iter().map(|(f, v)| (f.as_str(), *v)).collect();
+
+        write_lock(&dir, &current, true);
+        assert_eq!(lib.check_formats().unwrap().region, "jp");
+
+        // an extra format this build does not know is fine
+        let mut extra = current.clone();
+        extra.push(("ripper-future", 1));
+        write_lock(&dir, &extra, true);
+        assert!(lib.check_formats().is_ok());
+
+        // an older unpack version, a missing format, or no header are refused
+        let older: Vec<(&str, u32)> = current
+            .iter()
+            .map(|&(f, v)| (f, if f == "ripper-unpack" { v - 1 } else { v }))
+            .collect();
+        write_lock(&dir, &older, true);
+        assert!(matches!(
+            lib.check_formats(),
+            Err(AssetError::Contract { .. })
+        ));
+        write_lock(&dir, &current[1..], true);
+        assert!(matches!(
+            lib.check_formats(),
+            Err(AssetError::Contract { .. })
+        ));
+        write_lock(&dir, &current, false);
+        assert!(matches!(
+            lib.check_formats(),
+            Err(AssetError::Contract { .. })
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

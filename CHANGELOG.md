@@ -8,6 +8,14 @@ together with its impact.
 
 ## 未发布
 
+### 变更 / Changed
+
+- **依赖 SekaiStoryRipper v0.3.0（`ripper-format` tag 从 v0.2.0 升级）**，library 需要用 Ripper v0.3.0 重新导出。
+  打开 library 时（本地和 S3）先核对 `ripper.lock.json`：它必须是 `ripper-lock` 文档，`formats` 表里 sse 读取的每个格式都要与编译时的版本一致，否则报错并提示重新导出（ADR-0006）。
+  特效改为按类型读取 `_ripper.json`（`ripper-unpack` v3）和 `_objects.json`（`ripper-objects` v1），格式不符是硬错误；此前加载失败的特效会被静默跳过。
+  无像素影响（同一 library 内容下输出不变）。
+  sse now requires a SekaiStoryRipper v0.3.0 library and checks its format table before reading.
+
 ### 新增 / Added
 
 - **S3**：`--library s3://bucket/prefix` 直接读取 SekaiStoryRipper 发布到 S3（或 MinIO、R2 等兼容服务）的 library，按 episode 只同步所需文件到本地缓存（`--cache-dir` / `SSE_CACHE_DIR`）；`-o s3://bucket/key` 渲染完成后上传视频与报告。凭据只从 `AWS_*` 环境变量读取。见 ADR-0015。无像素影响（与本地 library 逐字节相同）。

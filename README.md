@@ -43,7 +43,9 @@ export SSE_CUBISM_CORE_DIR=/path/to/CubismSdkForNative/Core    # SDK 的 Core �
 #       libLive2DCubismCore.so）放到 sse 可执行文件旁边，或用 SSE_CUBISM_CORE 指向它
 ```
 
-**3. 用 SekaiStoryRipper 下载剧情资源。** 见 [SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper) 的快速上手：
+**3. 用 SekaiStoryRipper 下载剧情资源。** 见 [SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper) 的快速上手。
+sse 只通过 Ripper 的输出（本地目录或 S3 前缀）与它交换数据，要求 Ripper 版本与 sse 依赖的 `ripper-format` 一致（当前为 **v0.3.0**）。
+打开 library 时会先核对 `ripper.lock.json` 里的格式版本，不一致时直接报错，并提示用对应版本重新导出：
 
 ```bash
 ripper rip unit:school-refusal-story-chapter/1              # CN，结果在 out/
@@ -141,7 +143,9 @@ Quick start:
 1. Build (`cargo build --release -p sse-cli`) or download a release. No Cubism SDK is needed to build.
 2. Download the Live2D Cubism SDK for Native yourself and point `SSE_CUBISM_CORE_DIR` at its
    `Core` directory (or put the Core shared library next to `sse`). Core is loaded at run time.
-3. Rip an episode with [SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper).
+3. Rip an episode with [SekaiStoryRipper](https://github.com/StarMoe-org/SekaiStoryRipper) v0.3.0 (the
+   release whose `ripper-format` sse is built with; sse checks the library's `ripper.lock.json`
+   before reading anything and refuses other format versions).
 4. Export the UI kit from a game client you own: `uv run tools/ui-kit/extract.py <client.ipa> ui`.
 5. `sse --library out export <selector> -o ep.mp4 --ui ui`.
 

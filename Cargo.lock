@@ -1558,8 +1558,8 @@ dependencies = [
 
 [[package]]
 name = "ripper-format"
-version = "0.2.0"
-source = "git+https://github.com/StarMoe-org/SekaiStoryRipper.git?tag=v0.2.0#f647b3fe95ae6347c725dc10fb5f75d44773cded"
+version = "0.3.0"
+source = "git+https://github.com/StarMoe-org/SekaiStoryRipper.git?tag=v0.3.0#6786b3389d5752a487dfcda17178fb33ef20a625"
 dependencies = [
  "serde",
 ]

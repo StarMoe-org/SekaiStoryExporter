@@ -12,7 +12,7 @@
 //!   then `WaitAllStop`: once no particle is alive and the Stop clip's length has passed, the
 //!   state is Stopped and `stopBehaviour == DestroyMySelf` destroys the object.
 //!
-//! This module reads a prefab from the SSR library (`_objects.json`, the clips as
+//! This module reads a prefab from the SSR library (`_objects.json` = `ripper-objects`, the clips as
 //! `.sse-motion.json`), and evaluates one instance per frame into sorted quads.
 
 use std::collections::BTreeMap;
@@ -196,13 +196,10 @@ pub struct Prefab {
 pub enum EffectError {
     #[error("{0}: {1}")]
     Load(String, String),
-}
-
-fn load_json(path: &Path) -> Result<Value, EffectError> {
-    let s = std::fs::read(path)
-        .map_err(|e| EffectError::Load(path.display().to_string(), e.to_string()))?;
-    serde_json::from_slice(&s)
-        .map_err(|e| EffectError::Load(path.display().to_string(), e.to_string()))
+    /// The library itself is wrong (missing file, unknown format version): not an effect the
+    /// renderer can skip.
+    #[error(transparent)]
+    Asset(#[from] sse_assets::AssetError),
 }
 
 /// Blend of a particle material: the built-in legacy particle shaders by file id
@@ -229,7 +226,9 @@ impl Prefab {
     /// `dir` = the bundle's library directory, `name` = the prefab (`StringVal`).
     pub fn load(lib: &sse_assets::Library, bundle: &str, name: &str) -> Result<Self, EffectError> {
         let dir = lib.path(bundle);
-        let objs = load_json(&dir.join("_objects.json"))?;
+        // the record first: an old unpack says so more clearly than its object graph
+        let record = lib.unpack_record(bundle)?;
+        let objs = Value::Object(lib.object_map(bundle)?);
         let by: BTreeMap<i64, &Value> = objs
             .as_object()
             .map(|o| {
@@ -245,15 +244,12 @@ impl Prefab {
         };
         let tree = |id: i64| by.get(&id).map(|o| &o["tree"]);
         // textures: pathId → png in this bundle
-        let ripper = load_json(&dir.join("_ripper.json"))?;
-        let mut pngs: BTreeMap<i64, String> = BTreeMap::new();
-        for fl in ripper["files"].as_array().into_iter().flatten() {
-            if fl["kind"] == "png"
-                && let Some(p) = fl["path"].as_str()
-            {
-                pngs.insert(fl["pathId"].as_i64().unwrap_or(0), format!("{bundle}/{p}"));
-            }
-        }
+        let pngs: BTreeMap<i64, String> = record
+            .files
+            .iter()
+            .filter(|f| f.kind == sse_assets::FileKind::Png)
+            .map(|f| (f.path_id, format!("{bundle}/{}", f.path)))
+            .collect();
         let shader_names = shader_names(lib);
         // a material may use a texture of a dependency bundle (e.g. `spot_light` → `snow`):
         // path ids are unique, so look through the sibling effect bundles
@@ -553,15 +549,15 @@ fn sibling_pngs(lib: &sse_assets::Library, bundle: &str) -> BTreeMap<i64, String
         let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
             continue;
         };
-        let Ok(r) = load_json(&dir.join("_ripper.json")) else {
+        let Ok(r) = lib.unpack_record(&format!("{parent}/{name}")) else {
             continue;
         };
-        for fl in r["files"].as_array().into_iter().flatten() {
-            if fl["kind"] == "png"
-                && let (Some(id), Some(p)) = (fl["pathId"].as_i64(), fl["path"].as_str())
-            {
-                out.insert(id, format!("{parent}/{name}/{p}"));
-            }
+        for f in r
+            .files
+            .iter()
+            .filter(|f| f.kind == sse_assets::FileKind::Png)
+        {
+            out.insert(f.path_id, format!("{parent}/{name}/{}", f.path));
         }
     }
     out
@@ -569,11 +565,9 @@ fn sibling_pngs(lib: &sse_assets::Library, bundle: &str) -> BTreeMap<i64, String
 
 fn shader_names(lib: &sse_assets::Library) -> BTreeMap<i64, String> {
     let mut out = BTreeMap::new();
-    if let Ok(r) = load_json(&lib.path("shader/particles").join("_ripper.json")) {
-        for fl in r["files"].as_array().into_iter().flatten() {
-            if let (Some(id), Some(p)) = (fl["pathId"].as_i64(), fl["path"].as_str()) {
-                out.insert(id, p.to_owned());
-            }
+    if let Ok(r) = lib.unpack_record("shader/particles") {
+        for f in &r.files {
+            out.insert(f.path_id, f.path.clone());
         }
     }
     out

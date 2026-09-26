@@ -57,8 +57,7 @@ fn pid(v: &Value) -> i64 {
 impl EffectSounds {
     pub fn load(lib: &Library, bundle: &str) -> Option<Self> {
         let dir = lib.path(bundle);
-        let objects: Value = sse_assets::read_json(&dir.join("_objects.json")).ok()?;
-        let obj = objects.as_object()?;
+        let obj = lib.object_map(bundle).ok()?;
         let by = |id: i64| obj.get(&id.to_string());
         // cues of the bundle's ACBs
         let mut cues = BTreeMap::new();

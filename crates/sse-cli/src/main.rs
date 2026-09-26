@@ -98,28 +98,22 @@ struct OutputArgs {
     game: Option<String>,
 }
 
-/// The server a SekaiStoryRipper library was ripped from (`region` in its lock file; CN before
-/// the lock recorded one).
-fn library_region(library: &std::path::Path) -> String {
-    std::fs::read(library.join("ripper.lock.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| v.get("region")?.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "cn".into())
-}
-
 impl OutputArgs {
     /// Both clients' talk windows use `FOT-RodinNTLGPro-DB SDF_Base` for the words and `-EB` for
     /// the name, with the same FaceInfo and layout. Only the source font behind them differs: CN
     /// ships Source Han Sans SC Medium/Bold under the Rodin names, JP the real FOT-RodinNTLG Pro
     /// DB/EB. `tools/ui-kit/extract.py` exports whichever the client has; a CN kit without them
     /// falls back to Source Han Sans SC files.
-    fn ui_assets(&self, library: &std::path::Path) -> sse_render::UiAssets {
+    fn ui_assets(&self, lib: &Library) -> sse_render::UiAssets {
         let opt = |name: &str| {
             let p = self.ui.join(name);
             p.is_file().then_some(p)
         };
-        let game = self.game.clone().unwrap_or_else(|| library_region(library));
+        let game = self
+            .game
+            .clone()
+            .or_else(|| lib.info().map(|i| i.region.clone()))
+            .unwrap_or_else(|| "cn".into());
         let rodin = ("FOT-RodinNTLGPro-DB.otf", "FOT-RodinNTLGPro-EB.otf");
         let (body, name) = match game.as_str() {
             "jp" => rodin,
@@ -240,8 +234,7 @@ fn main() -> Result<()> {
             out,
         } => {
             let table = bake(&lib, selector, &opts, out.config())?;
-            let mut r =
-                sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(lib.root()))?;
+            let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&lib))?;
             let f = table.frames.get(*frame as usize).with_context(|| {
                 format!("frame {frame} out of range (0..{})", table.frames.len())
             })?;
@@ -262,8 +255,7 @@ fn main() -> Result<()> {
         } => {
             let table = bake(&lib, selector, &opts, out.config())?;
             let target = Output::new(output, &cache)?;
-            let mut r =
-                sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(lib.root()))?;
+            let mut r = sse_render::Renderer::new(&lib, &table, out.config(), out.ui_assets(&lib))?;
             r.set_ffmpeg(ffmpeg.clone());
             let n = table.frames.len() as u32;
             let range = from.unwrap_or(0).min(n)..to.unwrap_or(n).min(n);
